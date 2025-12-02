@@ -86,6 +86,13 @@ type ListItem struct {
 	CreatedAt time.Time
 }
 
+type VehicleData struct {
+	Brand string
+	Model string
+	Color string
+	Year  int
+}
+
 func (r *ANPRRepository) GetOrCreatePlate(ctx context.Context, normalized, original string) (uuid.UUID, error) {
 	var plate Plate
 	err := r.db.WithContext(ctx).Where("normalized = ?", normalized).First(&plate).Error
@@ -256,20 +263,45 @@ func (r *ANPRRepository) SyncVehicleToWhitelist(ctx context.Context, plateNumber
 	return plateID, nil
 }
 
-// CheckVehicleExists проверяет, существует ли номер в таблице vehicles
-// Использует нормализацию для сравнения, проверяет только активные vehicles
-func (r *ANPRRepository) CheckVehicleExists(ctx context.Context, normalizedPlate string) (bool, error) {
-	var count int64
-	err := r.db.WithContext(ctx).
-		Table("vehicles").
-		Where("is_active = ? AND normalize_plate_number(plate_number) = ?", true, normalizedPlate).
-		Count(&count).Error
-
-	if err != nil {
-		return false, fmt.Errorf("failed to check vehicle: %w", err)
+// GetVehicleByPlate получает данные о транспорте по нормализованному номеру
+// Возвращает nil, если vehicle не найден или неактивен
+func (r *ANPRRepository) GetVehicleByPlate(ctx context.Context, normalizedPlate string) (*VehicleData, error) {
+	var vehicle struct {
+		Brand string
+		Model string
+		Color string
+		Year  int
 	}
 
-	return count > 0, nil
+	err := r.db.WithContext(ctx).
+		Table("vehicles").
+		Select("brand, model, color, year").
+		Where("is_active = ? AND normalize_plate_number(plate_number) = ?", true, normalizedPlate).
+		First(&vehicle).Error
+
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil // Vehicle не найден - это нормально
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get vehicle: %w", err)
+	}
+
+	return &VehicleData{
+		Brand: vehicle.Brand,
+		Model: vehicle.Model,
+		Color: vehicle.Color,
+		Year:  vehicle.Year,
+	}, nil
+}
+
+// CheckVehicleExists проверяет, существует ли номер в таблице vehicles
+// Использует GetVehicleByPlate для проверки
+func (r *ANPRRepository) CheckVehicleExists(ctx context.Context, normalizedPlate string) (bool, error) {
+	vehicle, err := r.GetVehicleByPlate(ctx, normalizedPlate)
+	if err != nil {
+		return false, err
+	}
+	return vehicle != nil, nil
 }
 
 // DeleteOldEvents удаляет события старше указанного количества дней

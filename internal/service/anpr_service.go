@@ -63,6 +63,44 @@ func (s *ANPRService) ProcessIncomingEvent(ctx context.Context, payload anpr.Eve
 		Str("original", payload.Plate).
 		Msg("plate retrieved or created successfully")
 
+	// Получаем данные о транспорте из vehicles ДО сохранения события
+	vehicleData, err := s.repo.GetVehicleByPlate(ctx, normalized)
+	if err != nil {
+		s.log.Error().
+			Err(err).
+			Str("plate", normalized).
+			Msg("failed to get vehicle data")
+		return nil, fmt.Errorf("failed to get vehicle data: %w", err)
+	}
+
+	vehicleExists := vehicleData != nil
+
+	// Обновляем данные о транспорте из vehicles, если vehicle найден
+	// Приоритет: данные из vehicles > данные от камеры
+	if vehicleExists {
+		if vehicleData.Brand != "" {
+			payload.Vehicle.Brand = vehicleData.Brand
+		}
+		if vehicleData.Model != "" {
+			payload.Vehicle.Model = vehicleData.Model
+		}
+		if vehicleData.Color != "" {
+			payload.Vehicle.Color = vehicleData.Color
+		}
+		// Year можно сохранить в raw_payload, если нужно
+		if payload.RawPayload == nil {
+			payload.RawPayload = make(map[string]interface{})
+		}
+		payload.RawPayload["vehicle_year"] = vehicleData.Year
+
+		s.log.Info().
+			Str("plate", normalized).
+			Str("brand", vehicleData.Brand).
+			Str("model", vehicleData.Model).
+			Str("color", vehicleData.Color).
+			Msg("vehicle data loaded from vehicles table")
+	}
+
 	cameraModel := payload.CameraModel
 	if cameraModel == "" {
 		cameraModel = defaultCameraModel
@@ -75,6 +113,7 @@ func (s *ANPRService) ProcessIncomingEvent(ctx context.Context, payload anpr.Eve
 	}
 	event.CameraModel = cameraModel
 
+	// Сохраняем событие с данными из vehicles (если vehicle найден)
 	if err := s.repo.CreateANPREvent(ctx, event); err != nil {
 		s.log.Error().
 			Err(err).
@@ -90,18 +129,9 @@ func (s *ANPRService) ProcessIncomingEvent(ctx context.Context, payload anpr.Eve
 		Str("plate", normalized).
 		Str("raw_plate", payload.Plate).
 		Str("camera_id", payload.CameraID).
+		Bool("vehicle_exists", vehicleExists).
 		Time("event_time", payload.EventTime).
 		Msg("saved ANPR event to database")
-
-	// Проверка по таблице vehicles вместо whitelist/blacklist
-	vehicleExists, err := s.repo.CheckVehicleExists(ctx, normalized)
-	if err != nil {
-		s.log.Error().
-			Err(err).
-			Str("plate", normalized).
-			Msg("failed to check vehicle")
-		return nil, fmt.Errorf("failed to check vehicle: %w", err)
-	}
 
 	if vehicleExists {
 		s.log.Info().
