@@ -43,8 +43,9 @@ type ListHit struct {
 }
 
 type ProcessResult struct {
-	EventID uuid.UUID `json:"event_id"`
-	PlateID uuid.UUID `json:"plate_id"`
-	Plate   string    `json:"plate"`
-	Hits    []ListHit `json:"hits"`
+	EventID       uuid.UUID `json:"event_id"`
+	PlateID       uuid.UUID `json:"plate_id"`
+	Plate         string    `json:"plate"`
+	VehicleExists bool      `json:"vehicle_exists"` // true если номер найден в vehicles
+	Hits          []ListHit `json:"hits,omitempty"` // Оставляем для обратной совместимости, всегда пустой
 }

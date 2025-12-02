@@ -56,7 +56,7 @@ func (s *ANPRService) ProcessIncomingEvent(ctx context.Context, payload anpr.Eve
 			Msg("failed to get or create plate")
 		return nil, fmt.Errorf("failed to get or create plate: %w", err)
 	}
-	
+
 	s.log.Info().
 		Str("plate_id", plateID.String()).
 		Str("normalized", normalized).
@@ -93,40 +93,34 @@ func (s *ANPRService) ProcessIncomingEvent(ctx context.Context, payload anpr.Eve
 		Time("event_time", payload.EventTime).
 		Msg("saved ANPR event to database")
 
-	hits, err := s.repo.FindListsForPlate(ctx, plateID)
+	// Проверка по таблице vehicles вместо whitelist/blacklist
+	vehicleExists, err := s.repo.CheckVehicleExists(ctx, normalized)
 	if err != nil {
 		s.log.Error().
 			Err(err).
-			Str("plate_id", plateID.String()).
-			Msg("failed to find lists for plate")
-		return nil, fmt.Errorf("failed to find lists for plate: %w", err)
+			Str("plate", normalized).
+			Msg("failed to check vehicle")
+		return nil, fmt.Errorf("failed to check vehicle: %w", err)
 	}
 
-	if len(hits) > 0 {
+	if vehicleExists {
 		s.log.Info().
 			Str("plate_id", plateID.String()).
 			Str("plate", normalized).
-			Int("hits_count", len(hits)).
-			Msg("plate found in lists")
-		for _, hit := range hits {
-			s.log.Debug().
-				Str("list_id", hit.ListID.String()).
-				Str("list_name", hit.ListName).
-				Str("list_type", hit.ListType).
-				Msg("list hit")
-		}
+			Msg("vehicle found in vehicles table - access granted")
 	} else {
-		s.log.Debug().
+		s.log.Info().
 			Str("plate_id", plateID.String()).
 			Str("plate", normalized).
-			Msg("plate not found in any lists")
+			Msg("vehicle not found in vehicles table - access denied")
 	}
 
 	return &anpr.ProcessResult{
-		EventID: event.ID,
-		PlateID: plateID,
-		Plate:   normalized,
-		Hits:    hits,
+		EventID:       event.ID,
+		PlateID:       plateID,
+		Plate:         normalized,
+		VehicleExists: vehicleExists,
+		Hits:          []anpr.ListHit{}, // Оставляем пустым для обратной совместимости
 	}, nil
 }
 

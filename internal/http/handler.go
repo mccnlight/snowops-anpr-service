@@ -100,11 +100,12 @@ func (h *Handler) createANPREvent(c *gin.Context) {
 		Msg("successfully processed and saved ANPR event")
 
 	c.JSON(http.StatusCreated, gin.H{
-		"status":   "ok",
-		"event_id": result.EventID,
-		"plate_id": result.PlateID,
-		"plate":    result.Plate,
-		"hits":     result.Hits,
+		"status":         "ok",
+		"event_id":       result.EventID,
+		"plate_id":       result.PlateID,
+		"plate":          result.Plate,
+		"vehicle_exists": result.VehicleExists,
+		"hits":           result.Hits,
 	})
 }
 
@@ -283,12 +284,13 @@ func (h *Handler) createHikvisionEvent(c *gin.Context) {
 		Msg("successfully processed and saved Hikvision event")
 
 	c.JSON(http.StatusCreated, gin.H{
-		"status":    "ok",
-		"event_id":  result.EventID,
-		"plate_id":  result.PlateID,
-		"plate":     result.Plate,
-		"hits":      result.Hits,
-		"processed": true,
+		"status":         "ok",
+		"event_id":       result.EventID,
+		"plate_id":       result.PlateID,
+		"plate":          result.Plate,
+		"vehicle_exists": result.VehicleExists,
+		"hits":           result.Hits,
+		"processed":      true,
 	})
 }
 

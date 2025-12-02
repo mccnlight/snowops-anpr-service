@@ -256,6 +256,22 @@ func (r *ANPRRepository) SyncVehicleToWhitelist(ctx context.Context, plateNumber
 	return plateID, nil
 }
 
+// CheckVehicleExists проверяет, существует ли номер в таблице vehicles
+// Использует нормализацию для сравнения, проверяет только активные vehicles
+func (r *ANPRRepository) CheckVehicleExists(ctx context.Context, normalizedPlate string) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).
+		Table("vehicles").
+		Where("is_active = ? AND normalize_plate_number(plate_number) = ?", true, normalizedPlate).
+		Count(&count).Error
+
+	if err != nil {
+		return false, fmt.Errorf("failed to check vehicle: %w", err)
+	}
+
+	return count > 0, nil
+}
+
 // DeleteOldEvents удаляет события старше указанного количества дней
 func (r *ANPRRepository) DeleteOldEvents(ctx context.Context, days int) (int64, error) {
 	cutoffTime := time.Now().AddDate(0, 0, -days)
