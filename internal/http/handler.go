@@ -1,38 +1,47 @@
 package http
 
 import (
+	"context"
+	"encoding/json"
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
 	"anpr-service/internal/config"
 	"anpr-service/internal/domain/anpr"
 	"anpr-service/internal/service"
+	"anpr-service/internal/storage"
 )
 
 type Handler struct {
 	anprService *service.ANPRService
 	config      *config.Config
 	log         zerolog.Logger
+	r2Client    *storage.R2Client
 }
 
 func NewHandler(
 	anprService *service.ANPRService,
 	cfg *config.Config,
 	log zerolog.Logger,
+	r2Client *storage.R2Client,
 ) *Handler {
 	return &Handler{
 		anprService: anprService,
 		config:      cfg,
 		log:         log,
+		r2Client:    r2Client,
 	}
 }
 
@@ -57,9 +66,76 @@ func (h *Handler) Register(r *gin.Engine, authMiddleware gin.HandlerFunc) {
 }
 
 func (h *Handler) createANPREvent(c *gin.Context) {
+	// Parse multipart form (max 50MB for photos)
+	if err := c.Request.ParseMultipartForm(50 << 20); err != nil {
+		// If not multipart, try JSON (backward compatibility)
+		var payload anpr.EventPayload
+		if err := c.ShouldBindJSON(&payload); err != nil {
+			c.JSON(http.StatusBadRequest, errorResponse("failed to parse request: "+err.Error()))
+			return
+		}
+
+		if payload.EventTime.IsZero() {
+			payload.EventTime = time.Now()
+		}
+
+		// Generate event ID upfront
+		eventID := uuid.New()
+
+		h.log.Info().
+			Str("plate", payload.Plate).
+			Str("camera_id", payload.CameraID).
+			Msg("processing ANPR event (JSON)")
+
+		result, err := h.anprService.ProcessIncomingEvent(c.Request.Context(), payload, h.config.Camera.Model, eventID, nil)
+		if err != nil {
+			if errors.Is(err, service.ErrInvalidInput) {
+				h.log.Warn().
+					Err(err).
+					Str("plate", payload.Plate).
+					Str("camera_id", payload.CameraID).
+					Msg("invalid input for ANPR event")
+				c.JSON(http.StatusBadRequest, errorResponse(err.Error()))
+				return
+			}
+			h.log.Error().
+				Err(err).
+				Str("plate", payload.Plate).
+				Str("camera_id", payload.CameraID).
+				Msg("failed to process ANPR event")
+			c.JSON(http.StatusInternalServerError, errorResponse("internal error"))
+			return
+		}
+
+		h.log.Info().
+			Str("event_id", result.EventID.String()).
+			Str("plate_id", result.PlateID.String()).
+			Str("plate", result.Plate).
+			Int("hits_count", len(result.Hits)).
+			Msg("successfully processed and saved ANPR event")
+
+		c.JSON(http.StatusCreated, gin.H{
+			"status":         "ok",
+			"event_id":       result.EventID,
+			"plate_id":       result.PlateID,
+			"plate":          result.Plate,
+			"vehicle_exists": result.VehicleExists,
+			"hits":           result.Hits,
+			"photos":         result.PhotoURLs,
+		})
+		return
+	}
+
+	// Handle multipart form data
+	eventJSON := c.PostForm("event")
+	if eventJSON == "" {
+		c.JSON(http.StatusBadRequest, errorResponse("event field is required"))
+		return
+	}
+
 	var payload anpr.EventPayload
-	if err := c.ShouldBindJSON(&payload); err != nil {
-		c.JSON(http.StatusBadRequest, errorResponse(err.Error()))
+	if err := json.Unmarshal([]byte(eventJSON), &payload); err != nil {
+		c.JSON(http.StatusBadRequest, errorResponse("invalid event JSON: "+err.Error()))
 		return
 	}
 
@@ -67,12 +143,46 @@ func (h *Handler) createANPREvent(c *gin.Context) {
 		payload.EventTime = time.Now()
 	}
 
+	// Generate event ID upfront so we can organize photos by event
+	eventID := uuid.New()
+
+	// Get photos from form
+	form, err := c.MultipartForm()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, errorResponse("failed to parse multipart form"))
+		return
+	}
+
+	photoFiles := form.File["photos"]
+	var photoURLs []string
+
+	// Upload photos organized by event_id
+	if h.r2Client != nil && len(photoFiles) > 0 {
+		for i, fileHeader := range photoFiles {
+			url, err := h.uploadEventPhoto(c.Request.Context(), fileHeader, eventID, i)
+			if err != nil {
+				h.log.Warn().
+					Err(err).
+					Str("filename", fileHeader.Filename).
+					Str("event_id", eventID.String()).
+					Msg("failed to upload photo")
+				continue
+			}
+			photoURLs = append(photoURLs, url)
+		}
+	} else if len(photoFiles) > 0 && h.r2Client == nil {
+		h.log.Warn().
+			Int("photos_count", len(photoFiles)).
+			Msg("photos provided but R2 storage not configured, skipping photo upload")
+	}
+
 	h.log.Info().
 		Str("plate", payload.Plate).
 		Str("camera_id", payload.CameraID).
-		Msg("processing ANPR event")
+		Int("photos_count", len(photoURLs)).
+		Msg("processing ANPR event with photos")
 
-	result, err := h.anprService.ProcessIncomingEvent(c.Request.Context(), payload, h.config.Camera.Model)
+	result, err := h.anprService.ProcessIncomingEvent(c.Request.Context(), payload, h.config.Camera.Model, eventID, photoURLs)
 	if err != nil {
 		if errors.Is(err, service.ErrInvalidInput) {
 			h.log.Warn().
@@ -97,6 +207,7 @@ func (h *Handler) createANPREvent(c *gin.Context) {
 		Str("plate_id", result.PlateID.String()).
 		Str("plate", result.Plate).
 		Int("hits_count", len(result.Hits)).
+		Int("photos_count", len(photoURLs)).
 		Msg("successfully processed and saved ANPR event")
 
 	c.JSON(http.StatusCreated, gin.H{
@@ -106,7 +217,79 @@ func (h *Handler) createANPREvent(c *gin.Context) {
 		"plate":          result.Plate,
 		"vehicle_exists": result.VehicleExists,
 		"hits":           result.Hits,
+		"photos":         result.PhotoURLs,
 	})
+}
+
+func (h *Handler) uploadEventPhoto(
+	ctx context.Context,
+	fileHeader *multipart.FileHeader,
+	eventID uuid.UUID,
+	index int,
+) (string, error) {
+	const maxPhotoSize = 10 << 20 // 10MB
+	if fileHeader.Size > maxPhotoSize {
+		return "", errors.New("photo too large, max 10MB")
+	}
+
+	if fileHeader.Size <= 0 {
+		return "", errors.New("photo is empty")
+	}
+
+	// Validate content type
+	contentType := fileHeader.Header.Get("Content-Type")
+	if contentType == "" {
+		// Try to detect from file
+		file, err := fileHeader.Open()
+		if err != nil {
+			return "", fmt.Errorf("failed to open file: %w", err)
+		}
+		defer file.Close()
+
+		buf := make([]byte, 512)
+		if n, _ := file.Read(buf); n > 0 {
+			contentType = http.DetectContentType(buf[:n])
+		}
+	}
+
+	if contentType == "" {
+		contentType = "image/jpeg"
+	}
+
+	if !strings.HasPrefix(contentType, "image/") {
+		return "", errors.New("file must be an image")
+	}
+
+	// Open file
+	file, err := fileHeader.Open()
+	if err != nil {
+		return "", fmt.Errorf("failed to open file: %w", err)
+	}
+	defer file.Close()
+
+	// Determine file extension
+	ext := strings.ToLower(filepath.Ext(fileHeader.Filename))
+	if ext == "" {
+		// Default based on content type
+		if strings.Contains(contentType, "jpeg") || strings.Contains(contentType, "jpg") {
+			ext = ".jpg"
+		} else if strings.Contains(contentType, "png") {
+			ext = ".png"
+		} else {
+			ext = ".jpg" // Default
+		}
+	}
+
+	// Organize photos by event: anpr-events/{event_id}/photo-{index}{ext}
+	key := fmt.Sprintf("anpr-events/%s/photo-%d%s", eventID.String(), index, ext)
+
+	// Upload to R2
+	url, err := h.r2Client.Upload(ctx, key, file, fileHeader.Size, contentType)
+	if err != nil {
+		return "", fmt.Errorf("r2 upload failed: %w", err)
+	}
+
+	return url, nil
 }
 
 func (h *Handler) listPlates(c *gin.Context) {
@@ -256,7 +439,10 @@ func (h *Handler) createHikvisionEvent(c *gin.Context) {
 		}
 	}
 
-	result, err := h.anprService.ProcessIncomingEvent(c.Request.Context(), payload, h.config.Camera.Model)
+	// Generate event ID upfront
+	eventID := uuid.New()
+
+	result, err := h.anprService.ProcessIncomingEvent(c.Request.Context(), payload, h.config.Camera.Model, eventID, nil)
 	if err != nil {
 		if errors.Is(err, service.ErrInvalidInput) {
 			h.log.Warn().
@@ -290,6 +476,7 @@ func (h *Handler) createHikvisionEvent(c *gin.Context) {
 		"plate":          result.Plate,
 		"vehicle_exists": result.VehicleExists,
 		"hits":           result.Hits,
+		"photos":         result.PhotoURLs,
 		"processed":      true,
 	})
 }

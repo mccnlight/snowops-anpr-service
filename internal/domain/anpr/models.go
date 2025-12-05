@@ -46,6 +46,15 @@ type ProcessResult struct {
 	EventID       uuid.UUID `json:"event_id"`
 	PlateID       uuid.UUID `json:"plate_id"`
 	Plate         string    `json:"plate"`
-	VehicleExists bool      `json:"vehicle_exists"` // true если номер найден в vehicles
-	Hits          []ListHit `json:"hits,omitempty"` // Оставляем для обратной совместимости, всегда пустой
+	VehicleExists bool      `json:"vehicle_exists"`   // true если номер найден в vehicles
+	Hits          []ListHit `json:"hits,omitempty"`   // Оставляем для обратной совместимости, всегда пустой
+	PhotoURLs     []string  `json:"photos,omitempty"` // URLs загруженных фотографий
+}
+
+type EventPhoto struct {
+	ID           uuid.UUID `json:"id"`
+	EventID      uuid.UUID `json:"event_id"`
+	PhotoURL     string    `json:"photo_url"`
+	DisplayOrder int       `json:"display_order"`
+	CreatedAt    time.Time `json:"created_at"`
 }

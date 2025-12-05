@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"anpr-service/internal/logger"
 	"anpr-service/internal/repository"
 	"anpr-service/internal/service"
+	"anpr-service/internal/storage"
 )
 
 func main() {
@@ -36,9 +38,18 @@ func main() {
 	anprRepo := repository.NewANPRRepository(database)
 	anprService := service.NewANPRService(anprRepo, appLogger)
 
+	// Initialize R2 client (optional, won't fail if not configured)
+	r2Client, err := storage.NewR2ClientFromEnv()
+	if err != nil && !errors.Is(err, storage.ErrNotConfigured) {
+		appLogger.Fatal().Err(err).Msg("failed to initialize R2 client")
+	}
+	if err != nil {
+		appLogger.Warn().Msg("R2 storage not configured, photo uploads will be disabled")
+	}
+
 	tokenParser := auth.NewParser(cfg.Auth.AccessSecret)
 
-	handler := httphandler.NewHandler(anprService, cfg, appLogger)
+	handler := httphandler.NewHandler(anprService, cfg, appLogger, r2Client)
 	authMiddleware := middleware.Auth(tokenParser)
 	router := httphandler.NewRouter(handler, authMiddleware, cfg.Environment, database)
 

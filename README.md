@@ -73,6 +73,12 @@ docker compose up --build
 
 - `POST /api/v1/anpr/events` - приём события от камеры
 
+Эндпоинт поддерживает два формата запроса:
+
+#### 1. JSON (для обратной совместимости)
+
+**Content-Type:** `application/json`
+
 Пример запроса:
 
 ```json
@@ -92,23 +98,48 @@ docker compose up --build
 }
 ```
 
-Ответ:
+#### 2. Multipart Form Data (с фотографиями)
+
+**Content-Type:** `multipart/form-data`
+
+Поля формы:
+- `event` (обязательно) - JSON строка с данными события
+- `photos` (опционально) - файлы фотографий (можно передать несколько)
+
+Пример запроса с фотографиями:
+
+```bash
+curl -X POST http://localhost:8082/api/v1/anpr/events \
+  -F "event={\"camera_id\":\"camera-001\",\"plate\":\"123 ABC 02\",\"event_time\":\"2025-01-21T12:34:56Z\"}" \
+  -F "photos=@photo1.jpg" \
+  -F "photos=@photo2.jpg" \
+  -F "photos=@photo3.jpg"
+```
+
+Фотографии загружаются в R2 и сохраняются в структуре: `anpr-events/{event_id}/photo-{index}.jpg`
+
+**Ответ:**
 
 ```json
 {
   "status": "ok",
-  "event_id": 123,
-  "plate_id": 45,
+  "event_id": "550e8400-e29b-41d4-a716-446655440000",
+  "plate_id": "660e8400-e29b-41d4-a716-446655440001",
   "plate": "123ABC02",
-  "hits": [
-    {
-      "list_id": 1,
-      "list_name": "default_blacklist",
-      "list_type": "BLACKLIST"
-    }
+  "vehicle_exists": true,
+  "hits": [],
+  "photos": [
+    "https://cdn.example.com/anpr-photos/anpr-events/550e8400-.../photo-0.jpg",
+    "https://cdn.example.com/anpr-photos/anpr-events/550e8400-.../photo-1.jpg"
   ]
 }
 ```
+
+**Примечания:**
+- Если R2 не настроен, фотографии будут проигнорированы (событие всё равно сохранится)
+- Максимальный размер одной фотографии: 10MB
+- Максимальный размер всего запроса: 50MB
+- Фотографии сохраняются в R2 с организацией по event_id для удобного управления
 
 ### Plates
 
@@ -159,4 +190,15 @@ docker compose up --build
 - `CAMERA_MODEL` - модель камеры
 - `HIK_CONNECT_DOMAIN` - домен HikConnect
 - `ENABLE_SNOW_VOLUME_ANALYSIS` - включить анализ объёма снега
+
+### R2 Storage (опционально, для загрузки фотографий)
+
+- `R2_ENDPOINT` - R2 endpoint URL (например, `https://{account-id}.r2.cloudflarestorage.com`)
+- `R2_ACCESS_KEY_ID` - Access Key ID для R2
+- `R2_SECRET_ACCESS_KEY` - Secret Access Key для R2
+- `R2_BUCKET` - название bucket в R2
+- `R2_REGION` - регион (по умолчанию `auto`)
+- `R2_PUBLIC_BASE_URL` - публичный URL для CDN (опционально, если используется CDN перед R2)
+
+Если R2 не настроен, сервис будет работать без возможности загрузки фотографий.
 

@@ -181,6 +181,17 @@ var migrationStatements = []string{
 
 	// Индекс для быстрого поиска по normalized_plate в anpr_events
 	`CREATE INDEX IF NOT EXISTS idx_anpr_events_normalized_plate_time ON anpr_events(normalized_plate, event_time DESC);`,
+
+	// Таблица anpr_event_photos - фотографии событий
+	`CREATE TABLE IF NOT EXISTS anpr_event_photos (
+		id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+		event_id        UUID NOT NULL REFERENCES anpr_events(id) ON DELETE CASCADE,
+		photo_url       TEXT NOT NULL,
+		display_order   INT DEFAULT 0,
+		created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+	);`,
+	`CREATE INDEX IF NOT EXISTS idx_anpr_event_photos_event_id ON anpr_event_photos(event_id);`,
+	`CREATE INDEX IF NOT EXISTS idx_anpr_event_photos_display_order ON anpr_event_photos(event_id, display_order);`,
 }
 
 func runMigrations(db *gorm.DB) error {

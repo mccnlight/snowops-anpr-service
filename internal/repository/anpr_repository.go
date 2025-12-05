@@ -37,6 +37,10 @@ func (ListItem) TableName() string {
 	return "anpr_list_items"
 }
 
+func (EventPhoto) TableName() string {
+	return "anpr_event_photos"
+}
+
 type Plate struct {
 	ID         uuid.UUID `gorm:"type:uuid;primaryKey;default:uuid_generate_v4()"`
 	Number     string    `gorm:"not null"`
@@ -93,6 +97,14 @@ type VehicleData struct {
 	Year  int
 }
 
+type EventPhoto struct {
+	ID           uuid.UUID `gorm:"type:uuid;primaryKey;default:uuid_generate_v4()"`
+	EventID      uuid.UUID `gorm:"type:uuid;not null"`
+	PhotoURL     string    `gorm:"not null"`
+	DisplayOrder int       `gorm:"default:0"`
+	CreatedAt    time.Time
+}
+
 func (r *ANPRRepository) GetOrCreatePlate(ctx context.Context, normalized, original string) (uuid.UUID, error) {
 	var plate Plate
 	err := r.db.WithContext(ctx).Where("normalized = ?", normalized).First(&plate).Error
@@ -117,7 +129,7 @@ func (r *ANPRRepository) GetOrCreatePlate(ctx context.Context, normalized, origi
 
 func (r *ANPRRepository) CreateANPREvent(ctx context.Context, event *anpr.Event) error {
 	dbEvent := ANPREvent{
-		ID:              uuid.New(),
+		ID:              event.ID, // Use pre-generated ID
 		PlateID:         &event.PlateID,
 		CameraID:        event.CameraID,
 		RawPlate:        event.Plate,
@@ -316,4 +328,33 @@ func (r *ANPRRepository) DeleteOldEvents(ctx context.Context, days int) (int64, 
 	}
 
 	return result.RowsAffected, nil
+}
+
+// CreateEventPhotos сохраняет фотографии события
+func (r *ANPRRepository) CreateEventPhotos(ctx context.Context, eventID uuid.UUID, photoURLs []string) error {
+	if len(photoURLs) == 0 {
+		return nil
+	}
+
+	photos := make([]EventPhoto, 0, len(photoURLs))
+	for i, url := range photoURLs {
+		photos = append(photos, EventPhoto{
+			EventID:      eventID,
+			PhotoURL:     url,
+			DisplayOrder: i,
+			CreatedAt:    time.Now(),
+		})
+	}
+
+	return r.db.WithContext(ctx).Create(&photos).Error
+}
+
+// GetEventPhotos получает все фотографии события
+func (r *ANPRRepository) GetEventPhotos(ctx context.Context, eventID uuid.UUID) ([]EventPhoto, error) {
+	var photos []EventPhoto
+	err := r.db.WithContext(ctx).
+		Where("event_id = ?", eventID).
+		Order("display_order ASC").
+		Find(&photos).Error
+	return photos, err
 }

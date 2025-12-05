@@ -31,7 +31,7 @@ func NewANPRService(repo *repository.ANPRRepository, log zerolog.Logger) *ANPRSe
 	}
 }
 
-func (s *ANPRService) ProcessIncomingEvent(ctx context.Context, payload anpr.EventPayload, defaultCameraModel string) (*anpr.ProcessResult, error) {
+func (s *ANPRService) ProcessIncomingEvent(ctx context.Context, payload anpr.EventPayload, defaultCameraModel string, eventID uuid.UUID, photoURLs []string) (*anpr.ProcessResult, error) {
 	if payload.Plate == "" {
 		return nil, fmt.Errorf("%w: plate is required", ErrInvalidInput)
 	}
@@ -107,6 +107,7 @@ func (s *ANPRService) ProcessIncomingEvent(ctx context.Context, payload anpr.Eve
 	}
 
 	event := &anpr.Event{
+		ID:              eventID, // Use pre-generated ID
 		PlateID:         plateID,
 		EventPayload:    payload,
 		NormalizedPlate: normalized,
@@ -123,6 +124,23 @@ func (s *ANPRService) ProcessIncomingEvent(ctx context.Context, payload anpr.Eve
 		return nil, fmt.Errorf("failed to create ANPR event: %w", err)
 	}
 
+	// Сохраняем фотографии (если есть)
+	if len(photoURLs) > 0 {
+		if err := s.repo.CreateEventPhotos(ctx, eventID, photoURLs); err != nil {
+			s.log.Warn().
+				Err(err).
+				Str("event_id", eventID.String()).
+				Int("photos_count", len(photoURLs)).
+				Msg("failed to save event photos")
+			// Don't fail the whole request if photos fail
+		} else {
+			s.log.Info().
+				Str("event_id", eventID.String()).
+				Int("photos_count", len(photoURLs)).
+				Msg("saved event photos")
+		}
+	}
+
 	s.log.Info().
 		Str("event_id", event.ID.String()).
 		Str("plate_id", plateID.String()).
@@ -130,6 +148,7 @@ func (s *ANPRService) ProcessIncomingEvent(ctx context.Context, payload anpr.Eve
 		Str("raw_plate", payload.Plate).
 		Str("camera_id", payload.CameraID).
 		Bool("vehicle_exists", vehicleExists).
+		Int("photos_count", len(photoURLs)).
 		Time("event_time", payload.EventTime).
 		Msg("saved ANPR event to database")
 
@@ -151,6 +170,7 @@ func (s *ANPRService) ProcessIncomingEvent(ctx context.Context, payload anpr.Eve
 		Plate:         normalized,
 		VehicleExists: vehicleExists,
 		Hits:          []anpr.ListHit{}, // Оставляем пустым для обратной совместимости
+		PhotoURLs:     photoURLs,
 	}, nil
 }
 
