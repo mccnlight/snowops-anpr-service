@@ -153,13 +153,26 @@ func (h *Handler) createANPREvent(c *gin.Context) {
 	// ИЗВЛЕКАЕМ СНЕГОВЫЕ ПОЛЯ НАПРЯМУЮ ИЗ eventMap (Go не парсит строку времени в *time.Time автоматически)
 	// Делаем это ДО того, как поля будут исключены из RawPayload
 	if payload.SnowVolumePercentage == nil {
-		if snowVolumePct, ok := eventMap["snow_volume_percentage"].(float64); ok {
+		// Пробуем разные типы: float64, int, float32
+		var snowVolumePct float64
+		var ok bool
+		if snowVolumePct, ok = eventMap["snow_volume_percentage"].(float64); !ok {
+			if pctInt, okInt := eventMap["snow_volume_percentage"].(int); okInt {
+				snowVolumePct = float64(pctInt)
+				ok = true
+			} else if pctFloat32, okFloat32 := eventMap["snow_volume_percentage"].(float32); okFloat32 {
+				snowVolumePct = float64(pctFloat32)
+				ok = true
+			}
+		}
+		if ok {
 			payload.SnowVolumePercentage = &snowVolumePct
 			h.log.Info().Float64("snow_volume_percentage", snowVolumePct).Msg("extracted snow_volume_percentage from eventMap")
 		} else {
 			// Значение по умолчанию: 0.0 если снег не обнаружен
 			defaultVolume := 0.0
 			payload.SnowVolumePercentage = &defaultVolume
+			h.log.Warn().Interface("snow_volume_percentage_type", eventMap["snow_volume_percentage"]).Msg("snow_volume_percentage not found or wrong type, using default 0.0")
 		}
 	}
 	if payload.SnowVolumeConfidence == nil {

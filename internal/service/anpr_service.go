@@ -98,7 +98,12 @@ func (s *ANPRService) ProcessIncomingEvent(ctx context.Context, payload anpr.Eve
 			Str("brand", vehicleData.Brand).
 			Str("model", vehicleData.Model).
 			Str("color", vehicleData.Color).
+			Float64("body_volume_m3", vehicleData.BodyVolumeM3).
 			Msg("vehicle data loaded from vehicles table")
+	} else {
+		s.log.Warn().
+			Str("plate", normalized).
+			Msg("vehicle not found in vehicles table")
 	}
 
 	cameraModel := payload.CameraModel
@@ -154,14 +159,37 @@ func (s *ANPRService) ProcessIncomingEvent(ctx context.Context, payload anpr.Eve
 
 	// Вычисляем snow_volume_m3 на основе процента и объема кузова
 	// Формула: snow_volume_m3 = (snow_volume_percentage / 100) * body_volume_m3
-	if event.SnowVolumePercentage != nil && vehicleExists && vehicleData.BodyVolumeM3 > 0 {
-		volumeM3 := (*event.SnowVolumePercentage / 100.0) * vehicleData.BodyVolumeM3
-		event.SnowVolumeM3 = &volumeM3
+	// Вычисляем только если есть процент (даже если 0) И vehicle найден И у vehicle есть объем
+	if event.SnowVolumePercentage != nil {
 		s.log.Info().
-			Float64("percentage", *event.SnowVolumePercentage).
-			Float64("body_volume_m3", vehicleData.BodyVolumeM3).
-			Float64("snow_volume_m3", volumeM3).
-			Msg("calculated snow volume in m3")
+			Float64("snow_volume_percentage", *event.SnowVolumePercentage).
+			Bool("vehicle_exists", vehicleExists).
+			Bool("matched_snow", event.MatchedSnow).
+			Msg("checking conditions for volume calculation")
+		
+		if vehicleExists && vehicleData.BodyVolumeM3 > 0 {
+			volumeM3 := (*event.SnowVolumePercentage / 100.0) * vehicleData.BodyVolumeM3
+			event.SnowVolumeM3 = &volumeM3
+			s.log.Info().
+				Float64("percentage", *event.SnowVolumePercentage).
+				Float64("body_volume_m3", vehicleData.BodyVolumeM3).
+				Float64("snow_volume_m3", volumeM3).
+				Msg("calculated snow volume in m3")
+		} else {
+			if !vehicleExists {
+				s.log.Warn().
+					Str("plate", normalized).
+					Msg("cannot calculate snow_volume_m3: vehicle not found")
+			} else if vehicleData.BodyVolumeM3 <= 0 {
+				s.log.Warn().
+					Str("plate", normalized).
+					Float64("body_volume_m3", vehicleData.BodyVolumeM3).
+					Msg("cannot calculate snow_volume_m3: body_volume_m3 is zero or negative")
+			}
+		}
+	} else {
+		s.log.Warn().
+			Msg("cannot calculate snow_volume_m3: snow_volume_percentage is nil")
 	}
 
 	// matched_snow всегда берем из payload (если есть в JSON, иначе из RawPayload)
