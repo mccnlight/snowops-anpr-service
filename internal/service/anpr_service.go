@@ -364,6 +364,8 @@ func (s *ANPRService) DeleteOldEvents(ctx context.Context, days int) (int64, err
 
 // DeleteAllEvents удаляет все события из базы данных
 func (s *ANPRService) DeleteAllEvents(ctx context.Context) (int64, error) {
+	s.log.Warn().Msg("attempting to delete ALL events from database")
+	
 	deletedCount, err := s.repo.DeleteAllEvents(ctx)
 	if err != nil {
 		s.log.Error().
@@ -374,7 +376,7 @@ func (s *ANPRService) DeleteAllEvents(ctx context.Context) (int64, error) {
 
 	s.log.Warn().
 		Int64("deleted_count", deletedCount).
-		Msg("deleted ALL events")
+		Msg("successfully deleted ALL events from database")
 
 	return deletedCount, nil
 }

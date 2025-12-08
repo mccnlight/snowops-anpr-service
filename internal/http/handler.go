@@ -846,14 +846,25 @@ func (h *Handler) deleteAllEvents(c *gin.Context) {
 		return
 	}
 
+	h.log.Warn().Str("user_ip", c.ClientIP()).Msg("DELETE ALL EVENTS requested")
+
 	deletedCount, err := h.anprService.DeleteAllEvents(c.Request.Context())
 	if err != nil {
-		h.log.Error().Err(err).Msg("failed to delete all events")
-		c.JSON(http.StatusInternalServerError, errorResponse("failed to delete all events"))
+		h.log.Error().
+			Err(err).
+			Str("error_details", err.Error()).
+			Msg("failed to delete all events")
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "failed to delete all events",
+			"details": err.Error(),
+		})
 		return
 	}
 
-	h.log.Warn().Int64("deleted_count", deletedCount).Msg("deleted ALL events")
+	h.log.Warn().
+		Int64("deleted_count", deletedCount).
+		Str("user_ip", c.ClientIP()).
+		Msg("successfully deleted ALL events")
 
 	c.JSON(http.StatusOK, gin.H{
 		"status":        "ok",

@@ -357,10 +357,11 @@ func (r *ANPRRepository) DeleteOldEvents(ctx context.Context, days int) (int64, 
 
 // DeleteAllEvents удаляет все события из базы данных
 func (r *ANPRRepository) DeleteAllEvents(ctx context.Context) (int64, error) {
-	// Используем Exec для массового удаления (GORM требует WHERE для Delete)
+	// Используем прямой SQL запрос для удаления всех событий
+	// Фотографии удалятся автоматически благодаря ON DELETE CASCADE в таблице anpr_event_photos
 	result := r.db.WithContext(ctx).Exec("DELETE FROM anpr_events")
 	if result.Error != nil {
-		return 0, result.Error
+		return 0, fmt.Errorf("failed to delete events from database: %w", result.Error)
 	}
 	return result.RowsAffected, nil
 }
