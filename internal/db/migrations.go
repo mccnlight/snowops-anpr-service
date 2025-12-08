@@ -76,15 +76,27 @@ var migrationStatements = []string{
 	`ALTER TABLE anpr_events ADD COLUMN IF NOT EXISTS vehicle_country TEXT;`,
 	`ALTER TABLE anpr_events ADD COLUMN IF NOT EXISTS vehicle_plate_color TEXT;`,
 	`ALTER TABLE anpr_events ADD COLUMN IF NOT EXISTS vehicle_speed NUMERIC(7,2);`,
-	// Поля для данных о снеге
-	`ALTER TABLE anpr_events ADD COLUMN IF NOT EXISTS snow_event_time TIMESTAMPTZ;`,
-	`ALTER TABLE anpr_events ADD COLUMN IF NOT EXISTS snow_camera_id TEXT;`,
+	// Поля для данных о снеге (snow_event_time и snow_camera_id убраны - используем event_time/created_at и camera_id)
 	`ALTER TABLE anpr_events ADD COLUMN IF NOT EXISTS snow_volume_percentage NUMERIC(5,2);`,
 	`ALTER TABLE anpr_events ADD COLUMN IF NOT EXISTS snow_volume_confidence NUMERIC(5,2);`,
 	`ALTER TABLE anpr_events ADD COLUMN IF NOT EXISTS snow_direction_ai TEXT;`,
 	`ALTER TABLE anpr_events ADD COLUMN IF NOT EXISTS matched_snow BOOLEAN DEFAULT FALSE;`,
 	`CREATE INDEX IF NOT EXISTS idx_anpr_events_matched_snow ON anpr_events(matched_snow) WHERE matched_snow = TRUE;`,
-	`CREATE INDEX IF NOT EXISTS idx_anpr_events_snow_event_time ON anpr_events(snow_event_time) WHERE snow_event_time IS NOT NULL;`,
+	// Удаляем дублирующие поля, если они существуют
+	`DO $$
+	BEGIN
+		IF EXISTS (SELECT 1 FROM information_schema.columns 
+			WHERE table_name = 'anpr_events' AND column_name = 'snow_event_time') THEN
+			ALTER TABLE anpr_events DROP COLUMN snow_event_time;
+		END IF;
+		IF EXISTS (SELECT 1 FROM information_schema.columns 
+			WHERE table_name = 'anpr_events' AND column_name = 'snow_camera_id') THEN
+			ALTER TABLE anpr_events DROP COLUMN snow_camera_id;
+		END IF;
+	END
+	$$;`,
+	// Удаляем индекс для snow_event_time, если он существует
+	`DROP INDEX IF EXISTS idx_anpr_events_snow_event_time;`,
 
 	// Таблица lists - списки номеров (whitelist/blacklist)
 	`CREATE TABLE IF NOT EXISTS anpr_lists (
