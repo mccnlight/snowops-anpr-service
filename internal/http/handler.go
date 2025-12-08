@@ -172,24 +172,38 @@ func (h *Handler) createANPREvent(c *gin.Context) {
 		if snowVolumePct, ok := eventMap["snow_volume_percentage"].(float64); ok {
 			payload.SnowVolumePercentage = &snowVolumePct
 			h.log.Info().Float64("snow_volume_percentage", snowVolumePct).Msg("extracted snow_volume_percentage from eventMap")
+		} else {
+			// Значение по умолчанию: 0.0 если снег не обнаружен
+			defaultVolume := 0.0
+			payload.SnowVolumePercentage = &defaultVolume
 		}
 	}
 	if payload.SnowVolumeConfidence == nil {
 		if snowVolumeConf, ok := eventMap["snow_volume_confidence"].(float64); ok {
 			payload.SnowVolumeConfidence = &snowVolumeConf
 			h.log.Info().Float64("snow_volume_confidence", snowVolumeConf).Msg("extracted snow_volume_confidence from eventMap")
+		} else {
+			// Значение по умолчанию: 0.0 если снег не обнаружен
+			defaultConfidence := 0.0
+			payload.SnowVolumeConfidence = &defaultConfidence
 		}
 	}
 	if payload.SnowDirectionAI == "" {
 		if snowDirection, ok := eventMap["snow_direction_ai"].(string); ok && snowDirection != "" {
 			payload.SnowDirectionAI = snowDirection
 			h.log.Info().Str("snow_direction_ai", snowDirection).Msg("extracted snow_direction_ai from eventMap")
+		} else {
+			// Значение по умолчанию: "not_detected" если снег не обнаружен
+			payload.SnowDirectionAI = "not_detected"
 		}
 	}
 	if !payload.MatchedSnow {
 		if matchedSnow, ok := eventMap["matched_snow"].(bool); ok {
 			payload.MatchedSnow = matchedSnow
 			h.log.Info().Bool("matched_snow", matchedSnow).Msg("extracted matched_snow from eventMap")
+		} else {
+			// Значение по умолчанию: false если поле не пришло
+			payload.MatchedSnow = false
 		}
 	}
 

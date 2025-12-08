@@ -116,6 +116,7 @@ func (s *ANPRService) ProcessIncomingEvent(ctx context.Context, payload anpr.Eve
 
 	// Данные о снеге: сначала используем поля из payload (если они заполнились при парсинге JSON)
 	// Если полей нет, пытаемся извлечь из RawPayload (для обратной совместимости)
+	// Если и там нет - устанавливаем значения по умолчанию (0, пустые строки)
 	if payload.SnowEventTime == nil && payload.RawPayload != nil {
 		if snowEventTimeStr, ok := payload.RawPayload["snow_event_time"].(string); ok && snowEventTimeStr != "" {
 			if snowTime, err := time.Parse(time.RFC3339, snowEventTimeStr); err == nil {
@@ -125,43 +126,70 @@ func (s *ANPRService) ProcessIncomingEvent(ctx context.Context, payload anpr.Eve
 	} else if payload.SnowEventTime != nil {
 		event.SnowEventTime = payload.SnowEventTime
 	}
+	// snow_event_time остается nil если события нет - это нормально
 
+	// snow_camera_id: используем из payload или RawPayload, иначе пустая строка
 	if payload.SnowCameraID == "" && payload.RawPayload != nil {
-		if snowCameraID, ok := payload.RawPayload["snow_camera_id"].(string); ok && snowCameraID != "" {
+		if snowCameraID, ok := payload.RawPayload["snow_camera_id"].(string); ok {
 			event.SnowCameraID = snowCameraID
 		}
-	} else if payload.SnowCameraID != "" {
+	} else {
 		event.SnowCameraID = payload.SnowCameraID
 	}
 
+	// snow_volume_percentage: используем из payload или RawPayload, иначе 0.0
 	if payload.SnowVolumePercentage == nil && payload.RawPayload != nil {
 		if snowVolumePct, ok := payload.RawPayload["snow_volume_percentage"].(float64); ok {
 			event.SnowVolumePercentage = &snowVolumePct
+		} else {
+			// Значение по умолчанию: 0.0 если снег не обнаружен
+			defaultVolume := 0.0
+			event.SnowVolumePercentage = &defaultVolume
 		}
 	} else if payload.SnowVolumePercentage != nil {
 		event.SnowVolumePercentage = payload.SnowVolumePercentage
+	} else {
+		// Значение по умолчанию: 0.0 если снег не обнаружен
+		defaultVolume := 0.0
+		event.SnowVolumePercentage = &defaultVolume
 	}
 
+	// snow_volume_confidence: используем из payload или RawPayload, иначе 0.0
 	if payload.SnowVolumeConfidence == nil && payload.RawPayload != nil {
 		if snowVolumeConf, ok := payload.RawPayload["snow_volume_confidence"].(float64); ok {
 			event.SnowVolumeConfidence = &snowVolumeConf
+		} else {
+			// Значение по умолчанию: 0.0 если снег не обнаружен
+			defaultConfidence := 0.0
+			event.SnowVolumeConfidence = &defaultConfidence
 		}
 	} else if payload.SnowVolumeConfidence != nil {
 		event.SnowVolumeConfidence = payload.SnowVolumeConfidence
+	} else {
+		// Значение по умолчанию: 0.0 если снег не обнаружен
+		defaultConfidence := 0.0
+		event.SnowVolumeConfidence = &defaultConfidence
 	}
 
+	// snow_direction_ai: используем из payload или RawPayload, иначе "not_detected"
 	if payload.SnowDirectionAI == "" && payload.RawPayload != nil {
-		if snowDirection, ok := payload.RawPayload["snow_direction_ai"].(string); ok && snowDirection != "" {
+		if snowDirection, ok := payload.RawPayload["snow_direction_ai"].(string); ok {
 			event.SnowDirectionAI = snowDirection
+		} else {
+			event.SnowDirectionAI = "not_detected"
 		}
 	} else if payload.SnowDirectionAI != "" {
 		event.SnowDirectionAI = payload.SnowDirectionAI
+	} else {
+		event.SnowDirectionAI = "not_detected"
 	}
 
 	// matched_snow всегда берем из payload (если есть в JSON, иначе из RawPayload)
 	if !payload.MatchedSnow && payload.RawPayload != nil {
 		if matchedSnow, ok := payload.RawPayload["matched_snow"].(bool); ok {
 			event.MatchedSnow = matchedSnow
+		} else {
+			event.MatchedSnow = false
 		}
 	} else {
 		event.MatchedSnow = payload.MatchedSnow
