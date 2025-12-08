@@ -269,19 +269,32 @@ func (h *Handler) uploadEventPhoto(
 		return "", errors.New("photo is empty")
 	}
 
+	// Open file once - we'll use it for both content type detection and upload
+	file, err := fileHeader.Open()
+	if err != nil {
+		return "", fmt.Errorf("failed to open file: %w", err)
+	}
+	defer file.Close()
+
 	// Validate content type
 	contentType := fileHeader.Header.Get("Content-Type")
 	if contentType == "" {
 		// Try to detect from file
-		file, err := fileHeader.Open()
-		if err != nil {
-			return "", fmt.Errorf("failed to open file: %w", err)
-		}
-		defer file.Close()
-
 		buf := make([]byte, 512)
 		if n, _ := file.Read(buf); n > 0 {
 			contentType = http.DetectContentType(buf[:n])
+		}
+		// Reset file position to beginning for upload
+		if seeker, ok := file.(io.Seeker); ok {
+			seeker.Seek(0, io.SeekStart)
+		} else {
+			// If file doesn't support seeking, we need to reopen it
+			file.Close()
+			file, err = fileHeader.Open()
+			if err != nil {
+				return "", fmt.Errorf("failed to reopen file: %w", err)
+			}
+			defer file.Close()
 		}
 	}
 
@@ -292,13 +305,6 @@ func (h *Handler) uploadEventPhoto(
 	if !strings.HasPrefix(contentType, "image/") {
 		return "", errors.New("file must be an image")
 	}
-
-	// Open file
-	file, err := fileHeader.Open()
-	if err != nil {
-		return "", fmt.Errorf("failed to open file: %w", err)
-	}
-	defer file.Close()
 
 	// Determine file extension
 	ext := strings.ToLower(filepath.Ext(fileHeader.Filename))
