@@ -176,13 +176,26 @@ func (h *Handler) createANPREvent(c *gin.Context) {
 		}
 	}
 	if payload.SnowVolumeConfidence == nil {
-		if snowVolumeConf, ok := eventMap["snow_volume_confidence"].(float64); ok {
+		// Пробуем разные типы: float64, int, float32
+		var snowVolumeConf float64
+		var ok bool
+		if snowVolumeConf, ok = eventMap["snow_volume_confidence"].(float64); !ok {
+			if confInt, okInt := eventMap["snow_volume_confidence"].(int); okInt {
+				snowVolumeConf = float64(confInt)
+				ok = true
+			} else if confFloat32, okFloat32 := eventMap["snow_volume_confidence"].(float32); okFloat32 {
+				snowVolumeConf = float64(confFloat32)
+				ok = true
+			}
+		}
+		if ok {
 			payload.SnowVolumeConfidence = &snowVolumeConf
 			h.log.Info().Float64("snow_volume_confidence", snowVolumeConf).Msg("extracted snow_volume_confidence from eventMap")
 		} else {
 			// Значение по умолчанию: 0.0 если снег не обнаружен
 			defaultConfidence := 0.0
 			payload.SnowVolumeConfidence = &defaultConfidence
+			h.log.Warn().Interface("snow_volume_confidence_type", eventMap["snow_volume_confidence"]).Msg("snow_volume_confidence not found or wrong type, using default 0.0")
 		}
 	}
 	if !payload.MatchedSnow {
