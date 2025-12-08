@@ -166,7 +166,7 @@ func (s *ANPRService) ProcessIncomingEvent(ctx context.Context, payload anpr.Eve
 			Bool("vehicle_exists", vehicleExists).
 			Bool("matched_snow", event.MatchedSnow).
 			Msg("checking conditions for volume calculation")
-		
+
 		if vehicleExists && vehicleData.BodyVolumeM3 > 0 {
 			volumeM3 := (*event.SnowVolumePercentage / 100.0) * vehicleData.BodyVolumeM3
 			event.SnowVolumeM3 = &volumeM3
@@ -362,6 +362,63 @@ func (s *ANPRService) FindEvents(ctx context.Context, plateQuery *string, from, 
 	return result, nil
 }
 
+// GetEventByID получает событие по ID вместе с фотографиями
+func (s *ANPRService) GetEventByID(ctx context.Context, eventID uuid.UUID) (*EventInfo, error) {
+	event, err := s.repo.GetEventByID(ctx, eventID)
+	if err != nil {
+		s.log.Error().Err(err).Str("event_id", eventID.String()).Msg("failed to get event by id")
+		return nil, fmt.Errorf("failed to get event: %w", err)
+	}
+	if event == nil {
+		return nil, ErrNotFound
+	}
+
+	// Получаем фотографии события
+	photos, err := s.repo.GetEventPhotos(ctx, eventID)
+	if err != nil {
+		s.log.Warn().Err(err).Str("event_id", eventID.String()).Msg("failed to get event photos")
+		// Продолжаем без фото, если ошибка при получении фото
+		photos = []repository.EventPhoto{}
+	}
+
+	// Преобразуем фото в массив URL
+	photoURLs := make([]string, 0, len(photos))
+	for _, photo := range photos {
+		photoURLs = append(photoURLs, photo.PhotoURL)
+	}
+
+	// Преобразуем событие в EventInfo
+	var plateID *string
+	if event.PlateID != nil {
+		id := event.PlateID.String()
+		plateID = &id
+	}
+
+	info := EventInfo{
+		ID:                event.ID.String(),
+		PlateID:           plateID,
+		CameraID:          event.CameraID,
+		CameraModel:       event.CameraModel,
+		Direction:         event.Direction,
+		Lane:              event.Lane,
+		RawPlate:          event.RawPlate,
+		NormalizedPlate:   event.NormalizedPlate,
+		Confidence:        event.Confidence,
+		VehicleColor:      event.VehicleColor,
+		VehicleType:       event.VehicleType,
+		VehicleBrand:      event.VehicleBrand,
+		VehicleModel:      event.VehicleModel,
+		VehicleCountry:    event.VehicleCountry,
+		VehiclePlateColor: event.VehiclePlateColor,
+		VehicleSpeed:      event.VehicleSpeed,
+		SnapshotURL:       event.SnapshotURL,
+		EventTime:         event.EventTime,
+		Photos:            photoURLs,
+	}
+
+	return &info, nil
+}
+
 // CleanupOldEvents удаляет события старше указанного количества дней
 func (s *ANPRService) CleanupOldEvents(ctx context.Context, days int) (int64, error) {
 	deleted, err := s.repo.DeleteOldEvents(ctx, days)
@@ -460,4 +517,5 @@ type EventInfo struct {
 	VehicleSpeed      *float64  `json:"vehicle_speed,omitempty"`
 	SnapshotURL       *string   `json:"snapshot_url,omitempty"`
 	EventTime         time.Time `json:"event_time"`
+	Photos            []string  `json:"photos,omitempty"` // URLs фотографий (только для детального просмотра)
 }

@@ -380,6 +380,19 @@ func (r *ANPRRepository) CreateEventPhotos(ctx context.Context, eventID uuid.UUI
 	return r.db.WithContext(ctx).Create(&photos).Error
 }
 
+// GetEventByID получает событие по ID
+func (r *ANPRRepository) GetEventByID(ctx context.Context, eventID uuid.UUID) (*ANPREvent, error) {
+	var event ANPREvent
+	err := r.db.WithContext(ctx).Where("id = ?", eventID).First(&event).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil // Событие не найдено
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &event, nil
+}
+
 // GetEventPhotos получает все фотографии события
 func (r *ANPRRepository) GetEventPhotos(ctx context.Context, eventID uuid.UUID) ([]EventPhoto, error) {
 	var photos []EventPhoto

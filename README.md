@@ -69,6 +69,27 @@ docker compose up --build
 - `GET /health/live` - проверка работоспособности
 - `GET /health/ready` - проверка готовности (включая БД)
 
+### Авторизация
+
+Большинство эндпоинтов требуют JWT токен в заголовке:
+```
+Authorization: Bearer <JWT_TOKEN>
+```
+
+**Публичные эндпоинты (без авторизации):**
+- `POST /api/v1/anpr/events` - прием событий от камер
+- `POST /api/v1/anpr/hikvision` - прием событий от Hikvision
+- `GET /api/v1/anpr/hikvision` - проверка доступности камерой
+- `GET /api/v1/camera/status` - статус камеры
+
+**Защищенные эндпоинты (требуют авторизацию):**
+- `GET /api/v1/plates` - поиск номеров
+- `GET /api/v1/events` - список событий
+- `GET /api/v1/events/:id` - событие с фото
+- `POST /api/v1/anpr/sync-vehicle` - синхронизация транспорта
+- `DELETE /api/v1/anpr/events/old` - удаление старых событий
+- `DELETE /api/v1/anpr/events/all` - удаление всех событий
+
 ### ANPR Events
 
 - `POST /api/v1/anpr/events` - приём события от камеры
@@ -116,7 +137,14 @@ curl -X POST http://localhost:8082/api/v1/anpr/events \
   -F "photos=@photo3.jpg"
 ```
 
-Фотографии загружаются в R2 и сохраняются в структуре: `anpr-events/{event_id}/photo-{index}.jpg`
+Фотографии загружаются в R2 и сохраняются в структуре: `anpr-events/{YYYY-MM-DD}/{HH-MM-SS}-{event_id}-{normalized_plate}/photo-{index}.{ext}`
+
+**Пример пути:**
+```
+anpr-events/2025-01-21/12-34-56-550e8400-e29b-41d4-a716-446655440000-123ABC02/photo-0.jpg
+```
+
+**Примечание:** Время в пути использует часовой пояс Казахстана (GMT+5)
 
 **Ответ:**
 
@@ -143,7 +171,12 @@ curl -X POST http://localhost:8082/api/v1/anpr/events \
 
 ### Plates
 
-- `GET /api/v1/plates?plate=123ABC02` - поиск номеров
+- `GET /api/v1/plates?plate=123ABC02` - поиск номеров (требует авторизацию)
+
+**Заголовки:**
+```
+Authorization: Bearer <JWT_TOKEN>
+```
 
 Ответ:
 
@@ -162,7 +195,164 @@ curl -X POST http://localhost:8082/api/v1/anpr/events \
 
 ### Events
 
-- `GET /api/v1/events?plate=123ABC02&from=2025-01-01T00:00:00Z&to=2025-01-31T23:59:59Z&limit=50&offset=0` - поиск событий
+- `GET /api/v1/events?plate=123ABC02&from=2025-01-01T00:00:00Z&to=2025-01-31T23:59:59Z&limit=50&offset=0` - поиск событий (требует авторизацию)
+
+**Заголовки:**
+```
+Authorization: Bearer <JWT_TOKEN>
+```
+
+**Параметры запроса:**
+- `plate` (опционально) - номер машины для фильтрации
+- `from` (опционально) - начало временного диапазона (RFC3339)
+- `to` (опционально) - конец временного диапазона (RFC3339)
+- `limit` (опционально) - количество результатов (по умолчанию 50, максимум 100)
+- `offset` (опционально) - смещение для пагинации (по умолчанию 0)
+
+**Пример ответа:**
+
+```json
+{
+  "data": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "plate_id": "660e8400-e29b-41d4-a716-446655440001",
+      "camera_id": "camera-001",
+      "normalized_plate": "123ABC02",
+      "raw_plate": "123 ABC 02",
+      "event_time": "2025-01-21T12:34:56Z",
+      "confidence": 0.95,
+      "direction": "enter",
+      "lane": 1,
+      "vehicle_color": "white",
+      "vehicle_type": "car"
+    }
+  ]
+}
+```
+
+- `GET /api/v1/events/:id` - получение события по ID с фотографиями (требует авторизацию)
+
+**Заголовки:**
+```
+Authorization: Bearer <JWT_TOKEN>
+```
+
+**Пример запроса:**
+```
+GET /api/v1/events/550e8400-e29b-41d4-a716-446655440000
+```
+
+**Ответ:**
+
+```json
+{
+  "data": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "plate_id": "660e8400-e29b-41d4-a716-446655440001",
+    "camera_id": "camera-001",
+    "camera_model": "DS-TCG406-E",
+    "normalized_plate": "123ABC02",
+    "raw_plate": "123 ABC 02",
+    "event_time": "2025-01-21T12:34:56Z",
+    "confidence": 0.95,
+    "direction": "enter",
+    "lane": 1,
+    "vehicle_color": "white",
+    "vehicle_type": "car",
+    "vehicle_brand": "Toyota",
+    "vehicle_model": "Camry",
+    "photos": [
+      "https://cdn.example.com/anpr-events/2025-01-21/12-34-56-550e8400-...-123ABC02/photo-0.jpg",
+      "https://cdn.example.com/anpr-events/2025-01-21/12-34-56-550e8400-...-123ABC02/photo-1.jpg"
+    ]
+  }
+}
+```
+
+**Примечания:**
+- Если событие не найдено, возвращается статус 404
+- Если ID невалидный, возвращается статус 400
+- Если фото отсутствуют, поле `photos` будет пустым массивом
+- Время в пути к фото использует часовой пояс Казахстана (GMT+5) (требует авторизацию)
+
+**Заголовки:**
+```
+Authorization: Bearer <JWT_TOKEN>
+```
+
+**Параметры запроса:**
+- `plate` (опционально) - номер машины для фильтрации
+- `from` (опционально) - начало временного диапазона (RFC3339)
+- `to` (опционально) - конец временного диапазона (RFC3339)
+- `limit` (опционально) - количество результатов (по умолчанию 50, максимум 100)
+- `offset` (опционально) - смещение для пагинации (по умолчанию 0)
+
+Ответ:
+
+```json
+{
+  "data": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "plate_id": "660e8400-e29b-41d4-a716-446655440001",
+      "camera_id": "camera-001",
+      "normalized_plate": "123ABC02",
+      "raw_plate": "123 ABC 02",
+      "event_time": "2025-01-21T12:34:56Z",
+      "confidence": 0.95,
+      "direction": "enter",
+      "lane": 1,
+      "vehicle_color": "white",
+      "vehicle_type": "car"
+    }
+  ]
+}
+```
+
+- `GET /api/v1/events/:id` - получение события по ID с фотографиями (требует авторизацию)
+
+**Заголовки:**
+```
+Authorization: Bearer <JWT_TOKEN>
+```
+
+**Пример запроса:**
+```
+GET /api/v1/events/550e8400-e29b-41d4-a716-446655440000
+```
+
+Ответ:
+
+```json
+{
+  "data": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "plate_id": "660e8400-e29b-41d4-a716-446655440001",
+    "camera_id": "camera-001",
+    "camera_model": "DS-TCG406-E",
+    "normalized_plate": "123ABC02",
+    "raw_plate": "123 ABC 02",
+    "event_time": "2025-01-21T12:34:56Z",
+    "confidence": 0.95,
+    "direction": "enter",
+    "lane": 1,
+    "vehicle_color": "white",
+    "vehicle_type": "car",
+    "vehicle_brand": "Toyota",
+    "vehicle_model": "Camry",
+    "photos": [
+      "https://cdn.example.com/anpr-events/2025-01-21/12-34-56-550e8400-...-123ABC02/photo-0.jpg",
+      "https://cdn.example.com/anpr-events/2025-01-21/12-34-56-550e8400-...-123ABC02/photo-1.jpg"
+    ]
+  }
+}
+```
+
+**Примечания:**
+- Если событие не найдено, возвращается статус 404
+- Если ID невалидный, возвращается статус 400
+- Если фото отсутствуют, поле `photos` будет пустым массивом
 
 ## База данных
 

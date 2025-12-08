@@ -22,6 +22,7 @@ import (
 	"anpr-service/internal/domain/anpr"
 	"anpr-service/internal/service"
 	"anpr-service/internal/storage"
+	"anpr-service/internal/utils"
 )
 
 type Handler struct {
@@ -52,8 +53,6 @@ func (h *Handler) Register(r *gin.Engine, authMiddleware gin.HandlerFunc) {
 		public.POST("/anpr/events", h.createANPREvent)
 		public.POST("/anpr/hikvision", h.createHikvisionEvent)
 		public.GET("/anpr/hikvision", h.checkHikvisionEndpoint) // Для проверки доступности камерой
-		public.GET("/plates", h.listPlates)
-		public.GET("/events", h.listEvents)
 		public.GET("/camera/status", h.checkCameraStatus)
 	}
 
@@ -61,6 +60,9 @@ func (h *Handler) Register(r *gin.Engine, authMiddleware gin.HandlerFunc) {
 	protected := r.Group("/api/v1")
 	protected.Use(authMiddleware)
 	{
+		protected.GET("/plates", h.listPlates)
+		protected.GET("/events", h.listEvents)
+		protected.GET("/events/:id", h.getEvent)
 		protected.POST("/anpr/sync-vehicle", h.syncVehicleToWhitelist)
 		protected.DELETE("/anpr/events/old", h.deleteOldEvents)
 		protected.DELETE("/anpr/events/all", h.deleteAllEvents)
@@ -247,10 +249,17 @@ func (h *Handler) createANPREvent(c *gin.Context) {
 	photoFiles := form.File["photos"]
 	var photoURLs []string
 
-	// Upload photos organized by event_id
+	// Normalize plate number for folder structure
+	normalizedPlate := utils.NormalizePlate(payload.Plate)
+	if normalizedPlate == "" {
+		// Fallback to event ID if plate is empty
+		normalizedPlate = eventID.String()
+	}
+
+	// Upload photos organized by date, time, event_id and plate
 	if h.r2Client != nil && len(photoFiles) > 0 {
 		for i, fileHeader := range photoFiles {
-			url, err := h.uploadEventPhoto(c.Request.Context(), fileHeader, eventID, i)
+			url, err := h.uploadEventPhoto(c.Request.Context(), fileHeader, eventID, payload.EventTime, normalizedPlate, i)
 			if err != nil {
 				h.log.Warn().
 					Err(err).
@@ -316,6 +325,8 @@ func (h *Handler) uploadEventPhoto(
 	ctx context.Context,
 	fileHeader *multipart.FileHeader,
 	eventID uuid.UUID,
+	eventTime time.Time,
+	normalizedPlate string,
 	index int,
 ) (string, error) {
 	const maxPhotoSize = 10 << 20 // 10MB
@@ -377,8 +388,17 @@ func (h *Handler) uploadEventPhoto(
 		}
 	}
 
-	// Organize photos by event: anpr-events/{event_id}/photo-{index}{ext}
-	key := fmt.Sprintf("anpr-events/%s/photo-%d%s", eventID.String(), index, ext)
+	// Convert to Kazakhstan timezone (GMT+5)
+	kzLocation := time.FixedZone("KZ", 5*60*60) // UTC+5
+	eventTimeKZ := eventTime.In(kzLocation)
+
+	// Format date and time for folder structure: YYYY-MM-DD/HH-MM-SS-{event_id}-{normalized_plate}
+	dateStr := eventTimeKZ.Format("2006-01-02")
+	timeStr := eventTimeKZ.Format("15-04-05")
+
+	// Organize photos by date, time, event_id and plate: anpr-events/{YYYY-MM-DD}/{HH-MM-SS}-{event_id}-{normalized_plate}/photo-{index}{ext}
+	key := fmt.Sprintf("anpr-events/%s/%s-%s-%s/photo-%d%s",
+		dateStr, timeStr, eventID.String(), normalizedPlate, index, ext)
 
 	// Upload to R2
 	url, err := h.r2Client.Upload(ctx, key, file, fileHeader.Size, contentType)
@@ -450,6 +470,28 @@ func (h *Handler) listEvents(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, successResponse(events))
+}
+
+func (h *Handler) getEvent(c *gin.Context) {
+	eventIDStr := c.Param("id")
+	eventID, err := uuid.Parse(eventIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, errorResponse("invalid event id"))
+		return
+	}
+
+	event, err := h.anprService.GetEventByID(c.Request.Context(), eventID)
+	if err != nil {
+		if errors.Is(err, service.ErrNotFound) {
+			c.JSON(http.StatusNotFound, errorResponse("event not found"))
+			return
+		}
+		h.log.Error().Err(err).Str("event_id", eventID.String()).Msg("failed to get event")
+		c.JSON(http.StatusInternalServerError, errorResponse("internal error"))
+		return
+	}
+
+	c.JSON(http.StatusOK, successResponse(event))
 }
 
 func (h *Handler) handleError(c *gin.Context, err error) {
