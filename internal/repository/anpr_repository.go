@@ -72,7 +72,14 @@ type ANPREvent struct {
 	SnapshotURL       *string
 	EventTime         time.Time      `gorm:"not null"`
 	RawPayload        datatypes.JSON `gorm:"type:jsonb"`
-	CreatedAt         time.Time
+	// Поля для данных о снеге
+	SnowEventTime         *time.Time `gorm:"type:timestamptz"`
+	SnowCameraID         *string
+	SnowVolumePercentage *float64
+	SnowVolumeConfidence *float64
+	SnowDirectionAI      *string
+	MatchedSnow          bool `gorm:"default:false"`
+	CreatedAt            time.Time
 }
 
 type List struct {
@@ -181,6 +188,24 @@ func (r *ANPRRepository) CreateANPREvent(ctx context.Context, event *anpr.Event)
 		}
 		dbEvent.RawPayload = datatypes.JSON(raw)
 	}
+
+	// Сохраняем данные о снеге, если они есть
+	if event.SnowEventTime != nil {
+		dbEvent.SnowEventTime = event.SnowEventTime
+	}
+	if event.SnowCameraID != "" {
+		dbEvent.SnowCameraID = &event.SnowCameraID
+	}
+	if event.SnowVolumePercentage != nil {
+		dbEvent.SnowVolumePercentage = event.SnowVolumePercentage
+	}
+	if event.SnowVolumeConfidence != nil {
+		dbEvent.SnowVolumeConfidence = event.SnowVolumeConfidence
+	}
+	if event.SnowDirectionAI != "" {
+		dbEvent.SnowDirectionAI = &event.SnowDirectionAI
+	}
+	dbEvent.MatchedSnow = event.MatchedSnow
 
 	if err := r.db.WithContext(ctx).Create(&dbEvent).Error; err != nil {
 		return fmt.Errorf("failed to create ANPR event in database: %w", err)
@@ -327,6 +352,15 @@ func (r *ANPRRepository) DeleteOldEvents(ctx context.Context, days int) (int64, 
 		return 0, result.Error
 	}
 
+	return result.RowsAffected, nil
+}
+
+// DeleteAllEvents удаляет все события из базы данных
+func (r *ANPRRepository) DeleteAllEvents(ctx context.Context) (int64, error) {
+	result := r.db.WithContext(ctx).Delete(&ANPREvent{})
+	if result.Error != nil {
+		return 0, result.Error
+	}
 	return result.RowsAffected, nil
 }
 

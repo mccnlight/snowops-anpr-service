@@ -114,6 +114,59 @@ func (s *ANPRService) ProcessIncomingEvent(ctx context.Context, payload anpr.Eve
 	}
 	event.CameraModel = cameraModel
 
+	// Данные о снеге: сначала используем поля из payload (если они заполнились при парсинге JSON)
+	// Если полей нет, пытаемся извлечь из RawPayload (для обратной совместимости)
+	if payload.SnowEventTime == nil && payload.RawPayload != nil {
+		if snowEventTimeStr, ok := payload.RawPayload["snow_event_time"].(string); ok && snowEventTimeStr != "" {
+			if snowTime, err := time.Parse(time.RFC3339, snowEventTimeStr); err == nil {
+				event.SnowEventTime = &snowTime
+			}
+		}
+	} else if payload.SnowEventTime != nil {
+		event.SnowEventTime = payload.SnowEventTime
+	}
+
+	if payload.SnowCameraID == "" && payload.RawPayload != nil {
+		if snowCameraID, ok := payload.RawPayload["snow_camera_id"].(string); ok && snowCameraID != "" {
+			event.SnowCameraID = snowCameraID
+		}
+	} else if payload.SnowCameraID != "" {
+		event.SnowCameraID = payload.SnowCameraID
+	}
+
+	if payload.SnowVolumePercentage == nil && payload.RawPayload != nil {
+		if snowVolumePct, ok := payload.RawPayload["snow_volume_percentage"].(float64); ok {
+			event.SnowVolumePercentage = &snowVolumePct
+		}
+	} else if payload.SnowVolumePercentage != nil {
+		event.SnowVolumePercentage = payload.SnowVolumePercentage
+	}
+
+	if payload.SnowVolumeConfidence == nil && payload.RawPayload != nil {
+		if snowVolumeConf, ok := payload.RawPayload["snow_volume_confidence"].(float64); ok {
+			event.SnowVolumeConfidence = &snowVolumeConf
+		}
+	} else if payload.SnowVolumeConfidence != nil {
+		event.SnowVolumeConfidence = payload.SnowVolumeConfidence
+	}
+
+	if payload.SnowDirectionAI == "" && payload.RawPayload != nil {
+		if snowDirection, ok := payload.RawPayload["snow_direction_ai"].(string); ok && snowDirection != "" {
+			event.SnowDirectionAI = snowDirection
+		}
+	} else if payload.SnowDirectionAI != "" {
+		event.SnowDirectionAI = payload.SnowDirectionAI
+	}
+
+	// matched_snow всегда берем из payload (если есть в JSON, иначе из RawPayload)
+	if !payload.MatchedSnow && payload.RawPayload != nil {
+		if matchedSnow, ok := payload.RawPayload["matched_snow"].(bool); ok {
+			event.MatchedSnow = matchedSnow
+		}
+	} else {
+		event.MatchedSnow = payload.MatchedSnow
+	}
+
 	// Сохраняем событие с данными из vehicles (если vehicle найден)
 	if err := s.repo.CreateANPREvent(ctx, event); err != nil {
 		s.log.Error().
@@ -284,6 +337,46 @@ func (s *ANPRService) CleanupOldEvents(ctx context.Context, days int) (int64, er
 		s.log.Info().Int64("deleted_count", deleted).Int("days", days).Msg("cleaned up old events")
 	}
 	return deleted, nil
+}
+
+// DeleteOldEvents удаляет события старше указанного количества дней
+func (s *ANPRService) DeleteOldEvents(ctx context.Context, days int) (int64, error) {
+	if days < 1 {
+		return 0, fmt.Errorf("%w: days must be >= 1", ErrInvalidInput)
+	}
+
+	deletedCount, err := s.repo.DeleteOldEvents(ctx, days)
+	if err != nil {
+		s.log.Error().
+			Err(err).
+			Int("days", days).
+			Msg("failed to delete old events")
+		return 0, fmt.Errorf("failed to delete old events: %w", err)
+	}
+
+	s.log.Info().
+		Int("days", days).
+		Int64("deleted_count", deletedCount).
+		Msg("deleted old events")
+
+	return deletedCount, nil
+}
+
+// DeleteAllEvents удаляет все события из базы данных
+func (s *ANPRService) DeleteAllEvents(ctx context.Context) (int64, error) {
+	deletedCount, err := s.repo.DeleteAllEvents(ctx)
+	if err != nil {
+		s.log.Error().
+			Err(err).
+			Msg("failed to delete all events")
+		return 0, fmt.Errorf("failed to delete all events: %w", err)
+	}
+
+	s.log.Warn().
+		Int64("deleted_count", deletedCount).
+		Msg("deleted ALL events")
+
+	return deletedCount, nil
 }
 
 // SyncVehicleToWhitelist синхронизирует номер транспортного средства в whitelist
