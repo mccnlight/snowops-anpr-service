@@ -73,8 +73,6 @@ type ANPREvent struct {
 	EventTime         time.Time      `gorm:"not null"`
 	RawPayload        datatypes.JSON `gorm:"type:jsonb"`
 	// Поля для данных о снеге
-	SnowEventTime         *time.Time `gorm:"type:timestamptz"`
-	SnowCameraID         *string
 	SnowVolumePercentage *float64
 	SnowVolumeConfidence *float64
 	SnowDirectionAI      *string
@@ -190,12 +188,6 @@ func (r *ANPRRepository) CreateANPREvent(ctx context.Context, event *anpr.Event)
 	}
 
 	// Сохраняем данные о снеге, если они есть
-	if event.SnowEventTime != nil {
-		dbEvent.SnowEventTime = event.SnowEventTime
-	}
-	if event.SnowCameraID != "" {
-		dbEvent.SnowCameraID = &event.SnowCameraID
-	}
 	if event.SnowVolumePercentage != nil {
 		dbEvent.SnowVolumePercentage = event.SnowVolumePercentage
 	}

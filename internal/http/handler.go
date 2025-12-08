@@ -152,22 +152,6 @@ func (h *Handler) createANPREvent(c *gin.Context) {
 
 	// ИЗВЛЕКАЕМ СНЕГОВЫЕ ПОЛЯ НАПРЯМУЮ ИЗ eventMap (Go не парсит строку времени в *time.Time автоматически)
 	// Делаем это ДО того, как поля будут исключены из RawPayload
-	if payload.SnowEventTime == nil {
-		if snowEventTimeStr, ok := eventMap["snow_event_time"].(string); ok && snowEventTimeStr != "" {
-			if snowTime, err := time.Parse(time.RFC3339, snowEventTimeStr); err == nil {
-				payload.SnowEventTime = &snowTime
-				h.log.Info().Str("snow_event_time", snowEventTimeStr).Msg("parsed snow_event_time from eventMap")
-			} else {
-				h.log.Warn().Str("snow_event_time", snowEventTimeStr).Err(err).Msg("failed to parse snow_event_time")
-			}
-		}
-	}
-	if payload.SnowCameraID == "" {
-		if snowCameraID, ok := eventMap["snow_camera_id"].(string); ok && snowCameraID != "" {
-			payload.SnowCameraID = snowCameraID
-			h.log.Info().Str("snow_camera_id", snowCameraID).Msg("extracted snow_camera_id from eventMap")
-		}
-	}
 	if payload.SnowVolumePercentage == nil {
 		if snowVolumePct, ok := eventMap["snow_volume_percentage"].(float64); ok {
 			payload.SnowVolumePercentage = &snowVolumePct
@@ -218,7 +202,7 @@ func (h *Handler) createANPREvent(c *gin.Context) {
 		"camera_id": true, "camera_model": true, "plate": true, "confidence": true,
 		"direction": true, "lane": true, "event_time": true, "vehicle": true,
 		"snapshot_url": true, "raw_payload": true,
-		"snow_event_time": true, "snow_camera_id": true, "snow_volume_percentage": true,
+		"snow_volume_percentage": true,
 		"snow_volume_confidence": true, "snow_direction_ai": true, "matched_snow": true,
 	}
 

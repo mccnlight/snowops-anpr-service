@@ -117,25 +117,6 @@ func (s *ANPRService) ProcessIncomingEvent(ctx context.Context, payload anpr.Eve
 	// Данные о снеге: сначала используем поля из payload (если они заполнились при парсинге JSON)
 	// Если полей нет, пытаемся извлечь из RawPayload (для обратной совместимости)
 	// Если и там нет - устанавливаем значения по умолчанию (0, пустые строки)
-	if payload.SnowEventTime == nil && payload.RawPayload != nil {
-		if snowEventTimeStr, ok := payload.RawPayload["snow_event_time"].(string); ok && snowEventTimeStr != "" {
-			if snowTime, err := time.Parse(time.RFC3339, snowEventTimeStr); err == nil {
-				event.SnowEventTime = &snowTime
-			}
-		}
-	} else if payload.SnowEventTime != nil {
-		event.SnowEventTime = payload.SnowEventTime
-	}
-	// snow_event_time остается nil если события нет - это нормально
-
-	// snow_camera_id: используем из payload или RawPayload, иначе пустая строка
-	if payload.SnowCameraID == "" && payload.RawPayload != nil {
-		if snowCameraID, ok := payload.RawPayload["snow_camera_id"].(string); ok {
-			event.SnowCameraID = snowCameraID
-		}
-	} else {
-		event.SnowCameraID = payload.SnowCameraID
-	}
 
 	// snow_volume_percentage: используем из payload или RawPayload, иначе 0.0
 	if payload.SnowVolumePercentage == nil && payload.RawPayload != nil {
@@ -393,7 +374,7 @@ func (s *ANPRService) DeleteOldEvents(ctx context.Context, days int) (int64, err
 // DeleteAllEvents удаляет все события из базы данных
 func (s *ANPRService) DeleteAllEvents(ctx context.Context) (int64, error) {
 	s.log.Warn().Msg("attempting to delete ALL events from database")
-	
+
 	deletedCount, err := s.repo.DeleteAllEvents(ctx)
 	if err != nil {
 		s.log.Error().
