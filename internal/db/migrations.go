@@ -79,9 +79,18 @@ var migrationStatements = []string{
 	// Поля для данных о снеге (snow_event_time и snow_camera_id убраны - используем event_time/created_at и camera_id)
 	`ALTER TABLE anpr_events ADD COLUMN IF NOT EXISTS snow_volume_percentage NUMERIC(5,2);`,
 	`ALTER TABLE anpr_events ADD COLUMN IF NOT EXISTS snow_volume_confidence NUMERIC(5,2);`,
-	`ALTER TABLE anpr_events ADD COLUMN IF NOT EXISTS snow_direction_ai TEXT;`,
+	`ALTER TABLE anpr_events ADD COLUMN IF NOT EXISTS snow_volume_m3 NUMERIC(10,2);`,
 	`ALTER TABLE anpr_events ADD COLUMN IF NOT EXISTS matched_snow BOOLEAN DEFAULT FALSE;`,
 	`CREATE INDEX IF NOT EXISTS idx_anpr_events_matched_snow ON anpr_events(matched_snow) WHERE matched_snow = TRUE;`,
+	// Удаляем snow_direction_ai, если он существует (больше не используется)
+	`DO $$
+	BEGIN
+		IF EXISTS (SELECT 1 FROM information_schema.columns 
+			WHERE table_name = 'anpr_events' AND column_name = 'snow_direction_ai') THEN
+			ALTER TABLE anpr_events DROP COLUMN snow_direction_ai;
+		END IF;
+	END
+	$$;`,
 	// Удаляем дублирующие поля, если они существуют
 	`DO $$
 	BEGIN

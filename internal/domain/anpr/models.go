@@ -30,7 +30,7 @@ type EventPayload struct {
 	// Поля для данных о снеге
 	SnowVolumePercentage *float64 `json:"snow_volume_percentage,omitempty"`
 	SnowVolumeConfidence *float64 `json:"snow_volume_confidence,omitempty"`
-	SnowDirectionAI      string   `json:"snow_direction_ai,omitempty"`
+	SnowVolumeM3         *float64 `json:"snow_volume_m3,omitempty"`
 	MatchedSnow          bool     `json:"matched_snow,omitempty"`
 }
 

@@ -152,17 +152,16 @@ func (s *ANPRService) ProcessIncomingEvent(ctx context.Context, payload anpr.Eve
 		event.SnowVolumeConfidence = &defaultConfidence
 	}
 
-	// snow_direction_ai: используем из payload или RawPayload, иначе "not_detected"
-	if payload.SnowDirectionAI == "" && payload.RawPayload != nil {
-		if snowDirection, ok := payload.RawPayload["snow_direction_ai"].(string); ok {
-			event.SnowDirectionAI = snowDirection
-		} else {
-			event.SnowDirectionAI = "not_detected"
-		}
-	} else if payload.SnowDirectionAI != "" {
-		event.SnowDirectionAI = payload.SnowDirectionAI
-	} else {
-		event.SnowDirectionAI = "not_detected"
+	// Вычисляем snow_volume_m3 на основе процента и объема кузова
+	// Формула: snow_volume_m3 = (snow_volume_percentage / 100) * body_volume_m3
+	if event.SnowVolumePercentage != nil && vehicleExists && vehicleData.BodyVolumeM3 > 0 {
+		volumeM3 := (*event.SnowVolumePercentage / 100.0) * vehicleData.BodyVolumeM3
+		event.SnowVolumeM3 = &volumeM3
+		s.log.Info().
+			Float64("percentage", *event.SnowVolumePercentage).
+			Float64("body_volume_m3", vehicleData.BodyVolumeM3).
+			Float64("snow_volume_m3", volumeM3).
+			Msg("calculated snow volume in m3")
 	}
 
 	// matched_snow всегда берем из payload (если есть в JSON, иначе из RawPayload)

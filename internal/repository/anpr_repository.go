@@ -75,7 +75,7 @@ type ANPREvent struct {
 	// Поля для данных о снеге
 	SnowVolumePercentage *float64
 	SnowVolumeConfidence *float64
-	SnowDirectionAI      *string
+	SnowVolumeM3         *float64
 	MatchedSnow          bool `gorm:"default:false"`
 	CreatedAt            time.Time
 }
@@ -96,10 +96,11 @@ type ListItem struct {
 }
 
 type VehicleData struct {
-	Brand string
-	Model string
-	Color string
-	Year  int
+	Brand        string
+	Model        string
+	Color        string
+	Year         int
+	BodyVolumeM3 float64
 }
 
 type EventPhoto struct {
@@ -194,8 +195,8 @@ func (r *ANPRRepository) CreateANPREvent(ctx context.Context, event *anpr.Event)
 	if event.SnowVolumeConfidence != nil {
 		dbEvent.SnowVolumeConfidence = event.SnowVolumeConfidence
 	}
-	if event.SnowDirectionAI != "" {
-		dbEvent.SnowDirectionAI = &event.SnowDirectionAI
+	if event.SnowVolumeM3 != nil {
+		dbEvent.SnowVolumeM3 = event.SnowVolumeM3
 	}
 	dbEvent.MatchedSnow = event.MatchedSnow
 
@@ -296,15 +297,16 @@ func (r *ANPRRepository) SyncVehicleToWhitelist(ctx context.Context, plateNumber
 // Возвращает nil, если vehicle не найден или неактивен
 func (r *ANPRRepository) GetVehicleByPlate(ctx context.Context, normalizedPlate string) (*VehicleData, error) {
 	var vehicle struct {
-		Brand string
-		Model string
-		Color string
-		Year  int
+		Brand        string
+		Model        string
+		Color        string
+		Year         int
+		BodyVolumeM3 float64
 	}
 
 	err := r.db.WithContext(ctx).
 		Table("vehicles").
-		Select("brand, model, color, year").
+		Select("brand, model, color, year, body_volume_m3").
 		Where("is_active = ? AND normalize_plate_number(plate_number) = ?", true, normalizedPlate).
 		First(&vehicle).Error
 
@@ -316,10 +318,11 @@ func (r *ANPRRepository) GetVehicleByPlate(ctx context.Context, normalizedPlate 
 	}
 
 	return &VehicleData{
-		Brand: vehicle.Brand,
-		Model: vehicle.Model,
-		Color: vehicle.Color,
-		Year:  vehicle.Year,
+		Brand:        vehicle.Brand,
+		Model:        vehicle.Model,
+		Color:        vehicle.Color,
+		Year:         vehicle.Year,
+		BodyVolumeM3: vehicle.BodyVolumeM3,
 	}, nil
 }
 

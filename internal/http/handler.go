@@ -172,15 +172,6 @@ func (h *Handler) createANPREvent(c *gin.Context) {
 			payload.SnowVolumeConfidence = &defaultConfidence
 		}
 	}
-	if payload.SnowDirectionAI == "" {
-		if snowDirection, ok := eventMap["snow_direction_ai"].(string); ok && snowDirection != "" {
-			payload.SnowDirectionAI = snowDirection
-			h.log.Info().Str("snow_direction_ai", snowDirection).Msg("extracted snow_direction_ai from eventMap")
-		} else {
-			// Значение по умолчанию: "not_detected" если снег не обнаружен
-			payload.SnowDirectionAI = "not_detected"
-		}
-	}
 	if !payload.MatchedSnow {
 		if matchedSnow, ok := eventMap["matched_snow"].(bool); ok {
 			payload.MatchedSnow = matchedSnow
@@ -203,7 +194,7 @@ func (h *Handler) createANPREvent(c *gin.Context) {
 		"direction": true, "lane": true, "event_time": true, "vehicle": true,
 		"snapshot_url": true, "raw_payload": true,
 		"snow_volume_percentage": true,
-		"snow_volume_confidence": true, "snow_direction_ai": true, "matched_snow": true,
+		"snow_volume_confidence": true, "snow_volume_m3": true, "matched_snow": true,
 	}
 
 	// Добавляем неизвестные поля в RawPayload
