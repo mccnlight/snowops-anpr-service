@@ -150,12 +150,55 @@ func (h *Handler) createANPREvent(c *gin.Context) {
 		return
 	}
 
+	// ИЗВЛЕКАЕМ СНЕГОВЫЕ ПОЛЯ НАПРЯМУЮ ИЗ eventMap (Go не парсит строку времени в *time.Time автоматически)
+	// Делаем это ДО того, как поля будут исключены из RawPayload
+	if payload.SnowEventTime == nil {
+		if snowEventTimeStr, ok := eventMap["snow_event_time"].(string); ok && snowEventTimeStr != "" {
+			if snowTime, err := time.Parse(time.RFC3339, snowEventTimeStr); err == nil {
+				payload.SnowEventTime = &snowTime
+				h.log.Info().Str("snow_event_time", snowEventTimeStr).Msg("parsed snow_event_time from eventMap")
+			} else {
+				h.log.Warn().Str("snow_event_time", snowEventTimeStr).Err(err).Msg("failed to parse snow_event_time")
+			}
+		}
+	}
+	if payload.SnowCameraID == "" {
+		if snowCameraID, ok := eventMap["snow_camera_id"].(string); ok && snowCameraID != "" {
+			payload.SnowCameraID = snowCameraID
+			h.log.Info().Str("snow_camera_id", snowCameraID).Msg("extracted snow_camera_id from eventMap")
+		}
+	}
+	if payload.SnowVolumePercentage == nil {
+		if snowVolumePct, ok := eventMap["snow_volume_percentage"].(float64); ok {
+			payload.SnowVolumePercentage = &snowVolumePct
+			h.log.Info().Float64("snow_volume_percentage", snowVolumePct).Msg("extracted snow_volume_percentage from eventMap")
+		}
+	}
+	if payload.SnowVolumeConfidence == nil {
+		if snowVolumeConf, ok := eventMap["snow_volume_confidence"].(float64); ok {
+			payload.SnowVolumeConfidence = &snowVolumeConf
+			h.log.Info().Float64("snow_volume_confidence", snowVolumeConf).Msg("extracted snow_volume_confidence from eventMap")
+		}
+	}
+	if payload.SnowDirectionAI == "" {
+		if snowDirection, ok := eventMap["snow_direction_ai"].(string); ok && snowDirection != "" {
+			payload.SnowDirectionAI = snowDirection
+			h.log.Info().Str("snow_direction_ai", snowDirection).Msg("extracted snow_direction_ai from eventMap")
+		}
+	}
+	if !payload.MatchedSnow {
+		if matchedSnow, ok := eventMap["matched_snow"].(bool); ok {
+			payload.MatchedSnow = matchedSnow
+			h.log.Info().Bool("matched_snow", matchedSnow).Msg("extracted matched_snow from eventMap")
+		}
+	}
+
 	// Сохраняем все дополнительные поля в RawPayload
 	// (поля, которых нет в структуре EventPayload)
 	if payload.RawPayload == nil {
 		payload.RawPayload = make(map[string]interface{})
 	}
-	
+
 	// Известные поля EventPayload, которые не нужно дублировать в RawPayload
 	knownFields := map[string]bool{
 		"camera_id": true, "camera_model": true, "plate": true, "confidence": true,
@@ -164,7 +207,7 @@ func (h *Handler) createANPREvent(c *gin.Context) {
 		"snow_event_time": true, "snow_camera_id": true, "snow_volume_percentage": true,
 		"snow_volume_confidence": true, "snow_direction_ai": true, "matched_snow": true,
 	}
-	
+
 	// Добавляем неизвестные поля в RawPayload
 	for key, value := range eventMap {
 		if !knownFields[key] && value != nil {
@@ -861,7 +904,7 @@ func (h *Handler) deleteAllEvents(c *gin.Context) {
 			Str("error_details", err.Error()).
 			Msg("failed to delete all events")
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "failed to delete all events",
+			"error":   "failed to delete all events",
 			"details": err.Error(),
 		})
 		return
