@@ -20,7 +20,8 @@ type DBConfig struct {
 }
 
 type AuthConfig struct {
-	AccessSecret string
+	AccessSecret  string
+	InternalToken string
 }
 
 type CameraConfig struct {
@@ -65,7 +66,8 @@ func Load() (*Config, error) {
 			ConnMaxLifetime: v.GetDuration("DB_CONN_MAX_LIFETIME"),
 		},
 		Auth: AuthConfig{
-			AccessSecret: v.GetString("JWT_ACCESS_SECRET"),
+			AccessSecret:  v.GetString("JWT_ACCESS_SECRET"),
+			InternalToken: v.GetString("INTERNAL_TOKEN"),
 		},
 		Camera: CameraConfig{
 			RTSPURL:    v.GetString("CAMERA_RTSP_URL"),
@@ -112,6 +114,6 @@ func validate(cfg *Config) error {
 	if cfg.Auth.AccessSecret == "" {
 		return fmt.Errorf("JWT_ACCESS_SECRET is required")
 	}
+	// InternalToken не обязателен, но рекомендуется для production
 	return nil
 }
-

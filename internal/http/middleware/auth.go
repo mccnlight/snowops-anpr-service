@@ -64,3 +64,33 @@ func MustPrincipal(c *gin.Context) (model.Principal, bool) {
 	return principal, true
 }
 
+// InternalToken проверяет токен для внутренних сервисов
+func InternalToken(internalToken string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// Если токен не настроен, пропускаем проверку (для development)
+		if internalToken == "" {
+			c.Next()
+			return
+		}
+
+		// Проверяем заголовок X-Internal-Token
+		token := c.GetHeader("X-Internal-Token")
+
+		// Если нет в заголовке, проверяем query параметр
+		if token == "" {
+			token = c.Query("internal_token")
+		}
+
+		if token == "" {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "internal token missing"})
+			return
+		}
+
+		if token != internalToken {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "invalid internal token"})
+			return
+		}
+
+		c.Next()
+	}
+}

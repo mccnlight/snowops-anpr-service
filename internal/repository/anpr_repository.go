@@ -233,7 +233,7 @@ func (r *ANPRRepository) FindPlatesByNormalized(ctx context.Context, normalized 
 	return plates, err
 }
 
-func (r *ANPRRepository) FindEvents(ctx context.Context, normalizedPlate *string, from, to *time.Time, limit, offset int) ([]ANPREvent, error) {
+func (r *ANPRRepository) FindEvents(ctx context.Context, normalizedPlate *string, from, to *time.Time, direction *string, limit, offset int) ([]ANPREvent, error) {
 	query := r.db.WithContext(ctx).Model(&ANPREvent{})
 
 	if normalizedPlate != nil {
@@ -244,6 +244,9 @@ func (r *ANPRRepository) FindEvents(ctx context.Context, normalizedPlate *string
 	}
 	if to != nil {
 		query = query.Where("event_time <= ?", *to)
+	}
+	if direction != nil && *direction != "" {
+		query = query.Where("direction = ?", *direction)
 	}
 
 	query = query.Order("event_time DESC")
@@ -257,6 +260,24 @@ func (r *ANPRRepository) FindEvents(ctx context.Context, normalizedPlate *string
 	if offset > 0 {
 		query = query.Offset(offset)
 	}
+
+	var events []ANPREvent
+	err := query.Find(&events).Error
+	return events, err
+}
+
+// FindEventsByPlateAndTime находит события по номеру, времени и направлению (для внутреннего использования)
+func (r *ANPRRepository) FindEventsByPlateAndTime(ctx context.Context, normalizedPlate string, from, to time.Time, direction *string) ([]ANPREvent, error) {
+	query := r.db.WithContext(ctx).Model(&ANPREvent{}).
+		Where("normalized_plate = ?", normalizedPlate).
+		Where("event_time >= ?", from).
+		Where("event_time <= ?", to)
+
+	if direction != nil && *direction != "" {
+		query = query.Where("direction = ?", *direction)
+	}
+
+	query = query.Order("event_time ASC")
 
 	var events []ANPREvent
 	err := query.Find(&events).Error

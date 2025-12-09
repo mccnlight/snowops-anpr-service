@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -289,7 +290,7 @@ func (s *ANPRService) FindPlates(ctx context.Context, plateQuery string) ([]Plat
 	return result, nil
 }
 
-func (s *ANPRService) FindEvents(ctx context.Context, plateQuery *string, from, to *string, limit, offset int) ([]EventInfo, error) {
+func (s *ANPRService) FindEvents(ctx context.Context, plateQuery *string, from, to *string, direction *string, limit, offset int) ([]EventInfo, error) {
 	var normalizedPlate *string
 	if plateQuery != nil {
 		normalized := utils.NormalizePlate(*plateQuery)
@@ -314,6 +315,16 @@ func (s *ANPRService) FindEvents(ctx context.Context, plateQuery *string, from, 
 		toTime = &t
 	}
 
+	// Валидация direction
+	var validatedDirection *string
+	if direction != nil && *direction != "" {
+		dir := strings.ToLower(strings.TrimSpace(*direction))
+		if dir != "entry" && dir != "exit" {
+			return nil, fmt.Errorf("%w: direction must be 'entry' or 'exit'", ErrInvalidInput)
+		}
+		validatedDirection = &dir
+	}
+
 	if limit <= 0 {
 		limit = 50
 	}
@@ -324,7 +335,7 @@ func (s *ANPRService) FindEvents(ctx context.Context, plateQuery *string, from, 
 		offset = 0
 	}
 
-	events, err := s.repo.FindEvents(ctx, normalizedPlate, fromTime, toTime, limit, offset)
+	events, err := s.repo.FindEvents(ctx, normalizedPlate, fromTime, toTime, validatedDirection, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find events: %w", err)
 	}
@@ -335,6 +346,11 @@ func (s *ANPRService) FindEvents(ctx context.Context, plateQuery *string, from, 
 		if e.PlateID != nil {
 			id := e.PlateID.String()
 			plateID = &id
+		}
+		var polygonID *string
+		if e.PolygonID != nil {
+			id := e.PolygonID.String()
+			polygonID = &id
 		}
 		info := EventInfo{
 			ID:                e.ID.String(),
@@ -355,9 +371,77 @@ func (s *ANPRService) FindEvents(ctx context.Context, plateQuery *string, from, 
 			VehicleSpeed:      e.VehicleSpeed,
 			SnapshotURL:       e.SnapshotURL,
 			EventTime:         e.EventTime,
+			SnowVolumeM3:      e.SnowVolumeM3,
+			PolygonID:         polygonID,
 		}
 		result = append(result, info)
 	}
+
+	return result, nil
+}
+
+// GetEventsByPlateAndTime получает события для внутреннего использования (для tickets-service)
+// Использует ту же структуру EventInfo, что и публичный API
+func (s *ANPRService) GetEventsByPlateAndTime(ctx context.Context, normalizedPlate string, from, to time.Time, direction *string) ([]EventInfo, error) {
+	if normalizedPlate == "" {
+		return nil, fmt.Errorf("%w: normalized plate is required", ErrInvalidInput)
+	}
+
+	events, err := s.repo.FindEventsByPlateAndTime(ctx, normalizedPlate, from, to, direction)
+	if err != nil {
+		s.log.Error().
+			Err(err).
+			Str("plate", normalizedPlate).
+			Time("from", from).
+			Time("to", to).
+			Msg("failed to find events by plate and time")
+		return nil, fmt.Errorf("failed to find events: %w", err)
+	}
+
+	result := make([]EventInfo, 0, len(events))
+	for _, e := range events {
+		var plateID *string
+		if e.PlateID != nil {
+			id := e.PlateID.String()
+			plateID = &id
+		}
+		var polygonID *string
+		if e.PolygonID != nil {
+			id := e.PolygonID.String()
+			polygonID = &id
+		}
+
+		info := EventInfo{
+			ID:                e.ID.String(),
+			PlateID:           plateID,
+			CameraID:          e.CameraID,
+			CameraModel:       e.CameraModel,
+			Direction:         e.Direction,
+			Lane:              e.Lane,
+			RawPlate:          e.RawPlate,
+			NormalizedPlate:   e.NormalizedPlate,
+			Confidence:        e.Confidence,
+			VehicleColor:      e.VehicleColor,
+			VehicleType:       e.VehicleType,
+			VehicleBrand:      e.VehicleBrand,
+			VehicleModel:      e.VehicleModel,
+			VehicleCountry:    e.VehicleCountry,
+			VehiclePlateColor: e.VehiclePlateColor,
+			VehicleSpeed:      e.VehicleSpeed,
+			SnapshotURL:       e.SnapshotURL,
+			EventTime:         e.EventTime,
+			SnowVolumeM3:      e.SnowVolumeM3,
+			PolygonID:         polygonID,
+		}
+		result = append(result, info)
+	}
+
+	s.log.Info().
+		Str("plate", normalizedPlate).
+		Time("from", from).
+		Time("to", to).
+		Int("events_count", len(result)).
+		Msg("found events by plate and time")
 
 	return result, nil
 }
@@ -393,6 +477,11 @@ func (s *ANPRService) GetEventByID(ctx context.Context, eventID uuid.UUID) (*Eve
 		id := event.PlateID.String()
 		plateID = &id
 	}
+	var polygonID *string
+	if event.PolygonID != nil {
+		id := event.PolygonID.String()
+		polygonID = &id
+	}
 
 	info := EventInfo{
 		ID:                event.ID.String(),
@@ -413,6 +502,8 @@ func (s *ANPRService) GetEventByID(ctx context.Context, eventID uuid.UUID) (*Eve
 		VehicleSpeed:      event.VehicleSpeed,
 		SnapshotURL:       event.SnapshotURL,
 		EventTime:         event.EventTime,
+		SnowVolumeM3:      event.SnowVolumeM3,
+		PolygonID:         polygonID,
 		Photos:            photoURLs,
 	}
 
@@ -517,5 +608,7 @@ type EventInfo struct {
 	VehicleSpeed      *float64  `json:"vehicle_speed,omitempty"`
 	SnapshotURL       *string   `json:"snapshot_url,omitempty"`
 	EventTime         time.Time `json:"event_time"`
+	SnowVolumeM3      *float64  `json:"snow_volume_m3,omitempty"`
+	PolygonID         *string   `json:"polygon_id,omitempty"`
 	Photos            []string  `json:"photos,omitempty"` // URLs фотографий (только для детального просмотра)
 }

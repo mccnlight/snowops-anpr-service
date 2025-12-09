@@ -20,6 +20,7 @@ import (
 
 	"anpr-service/internal/config"
 	"anpr-service/internal/domain/anpr"
+	"anpr-service/internal/http/middleware"
 	"anpr-service/internal/service"
 	"anpr-service/internal/storage"
 	"anpr-service/internal/utils"
@@ -66,6 +67,13 @@ func (h *Handler) Register(r *gin.Engine, authMiddleware gin.HandlerFunc) {
 		protected.POST("/anpr/sync-vehicle", h.syncVehicleToWhitelist)
 		protected.DELETE("/anpr/events/old", h.deleteOldEvents)
 		protected.DELETE("/anpr/events/all", h.deleteAllEvents)
+	}
+
+	// Internal endpoints (для межсервисного взаимодействия)
+	internal := r.Group("/internal")
+	internal.Use(middleware.InternalToken(h.config.Auth.InternalToken))
+	{
+		internal.GET("/anpr/events", h.getInternalEvents)
 	}
 }
 
@@ -444,6 +452,11 @@ func (h *Handler) listEvents(c *gin.Context) {
 		to = &t
 	}
 
+	var direction *string
+	if d := strings.TrimSpace(c.Query("direction")); d != "" {
+		direction = &d
+	}
+
 	limit := 50
 	if l := c.Query("limit"); l != "" {
 		if parsed, err := parseInt(l); err == nil && parsed > 0 {
@@ -458,7 +471,7 @@ func (h *Handler) listEvents(c *gin.Context) {
 		}
 	}
 
-	events, err := h.anprService.FindEvents(c.Request.Context(), plateQuery, from, to, limit, offset)
+	events, err := h.anprService.FindEvents(c.Request.Context(), plateQuery, from, to, direction, limit, offset)
 	if err != nil {
 		if errors.Is(err, service.ErrInvalidInput) {
 			c.JSON(http.StatusBadRequest, errorResponse(err.Error()))
@@ -983,6 +996,92 @@ func errorResponse(message string) gin.H {
 	return gin.H{
 		"error": message,
 	}
+}
+
+// getInternalEvents обрабатывает запрос на получение событий для внутреннего использования
+// GET /internal/anpr/events?plate=KZ123ABC&start_time=2025-01-15T10:00:00Z&end_time=2025-01-15T18:00:00Z&direction=entry
+func (h *Handler) getInternalEvents(c *gin.Context) {
+	plate := strings.TrimSpace(c.Query("plate"))
+	if plate == "" {
+		c.JSON(http.StatusBadRequest, errorResponse("plate parameter is required"))
+		return
+	}
+
+	normalizedPlate := utils.NormalizePlate(plate)
+	if normalizedPlate == "" {
+		c.JSON(http.StatusBadRequest, errorResponse("invalid plate format"))
+		return
+	}
+
+	startTimeStr := strings.TrimSpace(c.Query("start_time"))
+	if startTimeStr == "" {
+		c.JSON(http.StatusBadRequest, errorResponse("start_time parameter is required (ISO8601 format)"))
+		return
+	}
+
+	endTimeStr := strings.TrimSpace(c.Query("end_time"))
+	if endTimeStr == "" {
+		c.JSON(http.StatusBadRequest, errorResponse("end_time parameter is required (ISO8601 format)"))
+		return
+	}
+
+	startTime, err := time.Parse(time.RFC3339, startTimeStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, errorResponse("invalid start_time format, expected ISO8601 (RFC3339)"))
+		return
+	}
+
+	endTime, err := time.Parse(time.RFC3339, endTimeStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, errorResponse("invalid end_time format, expected ISO8601 (RFC3339)"))
+		return
+	}
+
+	if endTime.Before(startTime) {
+		c.JSON(http.StatusBadRequest, errorResponse("end_time must be after start_time"))
+		return
+	}
+
+	var direction *string
+	if dir := strings.TrimSpace(c.Query("direction")); dir != "" {
+		dir = strings.ToLower(dir)
+		if dir != "entry" && dir != "exit" {
+			c.JSON(http.StatusBadRequest, errorResponse("direction must be 'entry' or 'exit'"))
+			return
+		}
+		direction = &dir
+	}
+
+	events, err := h.anprService.GetEventsByPlateAndTime(c.Request.Context(), normalizedPlate, startTime, endTime, direction)
+	if err != nil {
+		if errors.Is(err, service.ErrInvalidInput) {
+			h.log.Warn().
+				Err(err).
+				Str("plate", normalizedPlate).
+				Str("start_time", startTimeStr).
+				Str("end_time", endTimeStr).
+				Msg("invalid input for internal events query")
+			c.JSON(http.StatusBadRequest, errorResponse(err.Error()))
+			return
+		}
+		h.log.Error().
+			Err(err).
+			Str("plate", normalizedPlate).
+			Str("start_time", startTimeStr).
+			Str("end_time", endTimeStr).
+			Msg("failed to get internal events")
+		c.JSON(http.StatusInternalServerError, errorResponse("internal error"))
+		return
+	}
+
+	h.log.Info().
+		Str("plate", normalizedPlate).
+		Time("start_time", startTime).
+		Time("end_time", endTime).
+		Int("events_count", len(events)).
+		Msg("returning internal events")
+
+	c.JSON(http.StatusOK, successResponse(events))
 }
 
 func parseInt(s string) (int, error) {
