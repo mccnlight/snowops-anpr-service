@@ -112,6 +112,14 @@ func (s *ANPRService) ProcessIncomingEvent(ctx context.Context, payload anpr.Eve
 		cameraModel = defaultCameraModel
 	}
 
+	// Direction: если камера не дала direction или пришёл "unknown",
+	// ставим "entry" по умолчанию, чтобы события учитывались в tickets-сервисе.
+	dir := strings.ToLower(payload.Direction)
+	if dir == "" || dir == "unknown" {
+		dir = "entry"
+	}
+	payload.Direction = dir
+
 	event := &anpr.Event{
 		ID:              eventID, // Use pre-generated ID
 		PlateID:         plateID,
