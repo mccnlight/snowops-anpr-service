@@ -471,6 +471,31 @@ func (s *ANPRService) GetEventByID(ctx context.Context, eventID uuid.UUID) (*Eve
 		photoURLs = append(photoURLs, photo.PhotoURL)
 	}
 
+	// Получаем данные о водителе и подрядчике
+	var driverID, driverFullName, driverIIN, driverPhone *string
+	var contractorID, contractorName, contractorBIN *string
+
+	driverData, err := s.repo.GetDriverByVehiclePlate(ctx, event.NormalizedPlate)
+	if err != nil {
+		s.log.Warn().Err(err).Str("plate", event.NormalizedPlate).Msg("failed to get driver data")
+	} else if driverData != nil {
+		id := driverData.ID.String()
+		driverID = &id
+		driverFullName = &driverData.FullName
+		driverIIN = &driverData.IIN
+		driverPhone = &driverData.Phone
+	}
+
+	contractorData, err := s.repo.GetContractorByVehiclePlate(ctx, event.NormalizedPlate)
+	if err != nil {
+		s.log.Warn().Err(err).Str("plate", event.NormalizedPlate).Msg("failed to get contractor data")
+	} else if contractorData != nil {
+		id := contractorData.ID.String()
+		contractorID = &id
+		contractorName = &contractorData.Name
+		contractorBIN = &contractorData.BIN
+	}
+
 	// Преобразуем событие в EventInfo
 	var plateID *string
 	if event.PlateID != nil {
@@ -505,6 +530,14 @@ func (s *ANPRService) GetEventByID(ctx context.Context, eventID uuid.UUID) (*Eve
 		SnowVolumeM3:      event.SnowVolumeM3,
 		PolygonID:         polygonID,
 		Photos:            photoURLs,
+		// Driver and contractor info
+		DriverID:       driverID,
+		DriverFullName: driverFullName,
+		DriverIIN:      driverIIN,
+		DriverPhone:    driverPhone,
+		ContractorID:   contractorID,
+		ContractorName: contractorName,
+		ContractorBIN:  contractorBIN,
 	}
 
 	return &info, nil
@@ -611,4 +644,12 @@ type EventInfo struct {
 	SnowVolumeM3      *float64  `json:"snow_volume_m3,omitempty"`
 	PolygonID         *string   `json:"polygon_id,omitempty"`
 	Photos            []string  `json:"photos,omitempty"` // URLs фотографий (только для детального просмотра)
+	// Driver and contractor info
+	DriverID       *string `json:"driver_id,omitempty"`
+	DriverFullName *string `json:"driver_full_name,omitempty"`
+	DriverIIN      *string `json:"driver_iin,omitempty"`
+	DriverPhone    *string `json:"driver_phone,omitempty"`
+	ContractorID   *string `json:"contractor_id,omitempty"`
+	ContractorName *string `json:"contractor_name,omitempty"`
+	ContractorBIN  *string `json:"contractor_bin,omitempty"`
 }
