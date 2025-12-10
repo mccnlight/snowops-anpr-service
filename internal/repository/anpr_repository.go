@@ -103,6 +103,19 @@ type VehicleData struct {
 	BodyVolumeM3 float64
 }
 
+type DriverData struct {
+	ID       uuid.UUID
+	FullName string
+	IIN      string
+	Phone    string
+}
+
+type ContractorData struct {
+	ID   uuid.UUID
+	Name string
+	BIN  string
+}
+
 type EventPhoto struct {
 	ID           uuid.UUID `gorm:"type:uuid;primaryKey;default:uuid_generate_v4()"`
 	EventID      uuid.UUID `gorm:"type:uuid;not null"`
@@ -344,6 +357,70 @@ func (r *ANPRRepository) GetVehicleByPlate(ctx context.Context, normalizedPlate 
 		Color:        vehicle.Color,
 		Year:         vehicle.Year,
 		BodyVolumeM3: vehicle.BodyVolumeM3,
+	}, nil
+}
+
+// GetDriverByVehiclePlate получает данные о водителе по номеру транспортного средства
+// Возвращает nil, если водитель не найден или неактивен
+func (r *ANPRRepository) GetDriverByVehiclePlate(ctx context.Context, normalizedPlate string) (*DriverData, error) {
+	var driver struct {
+		ID       uuid.UUID
+		FullName string
+		IIN      string
+		Phone    string
+	}
+
+	err := r.db.WithContext(ctx).
+		Table("vehicles").
+		Select("drivers.id, drivers.full_name, drivers.iin, drivers.phone").
+		Joins("INNER JOIN drivers ON vehicles.driver_id = drivers.id").
+		Where("vehicles.is_active = ? AND drivers.is_active = ? AND normalize_plate_number(vehicles.plate_number) = ?",
+			true, true, normalizedPlate).
+		First(&driver).Error
+
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil // Водитель не найден - это нормально
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get driver: %w", err)
+	}
+
+	return &DriverData{
+		ID:       driver.ID,
+		FullName: driver.FullName,
+		IIN:      driver.IIN,
+		Phone:    driver.Phone,
+	}, nil
+}
+
+// GetContractorByVehiclePlate получает данные о подрядчике по номеру транспортного средства
+// Возвращает nil, если подрядчик не найден или неактивен
+func (r *ANPRRepository) GetContractorByVehiclePlate(ctx context.Context, normalizedPlate string) (*ContractorData, error) {
+	var contractor struct {
+		ID   uuid.UUID
+		Name string
+		BIN  string
+	}
+
+	err := r.db.WithContext(ctx).
+		Table("vehicles").
+		Select("organizations.id, organizations.name, organizations.bin").
+		Joins("INNER JOIN organizations ON vehicles.contractor_id = organizations.id").
+		Where("vehicles.is_active = ? AND organizations.is_active = ? AND normalize_plate_number(vehicles.plate_number) = ?",
+			true, true, normalizedPlate).
+		First(&contractor).Error
+
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil // Подрядчик не найден - это нормально
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get contractor: %w", err)
+	}
+
+	return &ContractorData{
+		ID:   contractor.ID,
+		Name: contractor.Name,
+		BIN:  contractor.BIN,
 	}, nil
 }
 

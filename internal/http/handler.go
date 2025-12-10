@@ -457,7 +457,7 @@ func (h *Handler) listEvents(c *gin.Context) {
 		direction = &d
 	}
 
-	limit := 50
+	limit := 10
 	if l := c.Query("limit"); l != "" {
 		if parsed, err := parseInt(l); err == nil && parsed > 0 {
 			limit = parsed
