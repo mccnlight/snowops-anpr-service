@@ -109,6 +109,14 @@ func (h *Handler) createANPREvent(c *gin.Context) {
 					Msg("invalid input for ANPR event")
 				c.JSON(http.StatusBadRequest, errorResponse(err.Error()))
 				return
+			} else if errors.Is(err, service.ErrNotFound) {
+				h.log.Warn().
+					Err(err).
+					Str("plate", payload.Plate).
+					Str("camera_id", payload.CameraID).
+					Msg("vehicle not whitelisted, rejecting ANPR event")
+				c.JSON(http.StatusNotFound, errorResponse("vehicle not in whitelist"))
+				return
 			}
 			h.log.Error().
 				Err(err).
@@ -299,6 +307,14 @@ func (h *Handler) createANPREvent(c *gin.Context) {
 				Str("camera_id", payload.CameraID).
 				Msg("invalid input for ANPR event")
 			c.JSON(http.StatusBadRequest, errorResponse(err.Error()))
+			return
+		} else if errors.Is(err, service.ErrNotFound) {
+			h.log.Warn().
+				Err(err).
+				Str("plate", payload.Plate).
+				Str("camera_id", payload.CameraID).
+				Msg("vehicle not whitelisted, rejecting ANPR event")
+			c.JSON(http.StatusNotFound, errorResponse("vehicle not in whitelist"))
 			return
 		}
 		h.log.Error().

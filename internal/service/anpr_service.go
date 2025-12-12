@@ -76,36 +76,38 @@ func (s *ANPRService) ProcessIncomingEvent(ctx context.Context, payload anpr.Eve
 
 	vehicleExists := vehicleData != nil
 
-	// Обновляем данные о транспорте из vehicles, если vehicle найден
-	// Приоритет: данные из vehicles > данные от камеры
-	if vehicleExists {
-		if vehicleData.Brand != "" {
-			payload.Vehicle.Brand = vehicleData.Brand
-		}
-		if vehicleData.Model != "" {
-			payload.Vehicle.Model = vehicleData.Model
-		}
-		if vehicleData.Color != "" {
-			payload.Vehicle.Color = vehicleData.Color
-		}
-		// Year можно сохранить в raw_payload, если нужно
-		if payload.RawPayload == nil {
-			payload.RawPayload = make(map[string]interface{})
-		}
-		payload.RawPayload["vehicle_year"] = vehicleData.Year
-
-		s.log.Info().
-			Str("plate", normalized).
-			Str("brand", vehicleData.Brand).
-			Str("model", vehicleData.Model).
-			Str("color", vehicleData.Color).
-			Float64("body_volume_m3", vehicleData.BodyVolumeM3).
-			Msg("vehicle data loaded from vehicles table")
-	} else {
+	// Если машины нет в whitelist (vehicles) — не сохраняем событие
+	if !vehicleExists {
 		s.log.Warn().
 			Str("plate", normalized).
-			Msg("vehicle not found in vehicles table")
+			Msg("vehicle not found in vehicles table, skipping event persist")
+		return nil, fmt.Errorf("%w: vehicle not whitelisted", ErrNotFound)
 	}
+
+	// Обновляем данные о транспорте из vehicles, если vehicle найден
+	// Приоритет: данные из vehicles > данные от камеры
+	if vehicleData.Brand != "" {
+		payload.Vehicle.Brand = vehicleData.Brand
+	}
+	if vehicleData.Model != "" {
+		payload.Vehicle.Model = vehicleData.Model
+	}
+	if vehicleData.Color != "" {
+		payload.Vehicle.Color = vehicleData.Color
+	}
+	// Year можно сохранить в raw_payload, если нужно
+	if payload.RawPayload == nil {
+		payload.RawPayload = make(map[string]interface{})
+	}
+	payload.RawPayload["vehicle_year"] = vehicleData.Year
+
+	s.log.Info().
+		Str("plate", normalized).
+		Str("brand", vehicleData.Brand).
+		Str("model", vehicleData.Model).
+		Str("color", vehicleData.Color).
+		Float64("body_volume_m3", vehicleData.BodyVolumeM3).
+		Msg("vehicle data loaded from vehicles table")
 
 	cameraModel := payload.CameraModel
 	if cameraModel == "" {
