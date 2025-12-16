@@ -1231,9 +1231,19 @@ func (h *Handler) getReports(c *gin.Context) {
 	// Если указан только один из периодов, используем его как границу
 	if !fromTime.IsZero() && toTime.IsZero() {
 		filters.To = time.Now()
+		toTime = filters.To
 	}
 	if fromTime.IsZero() && !toTime.IsZero() {
 		filters.From = toTime.AddDate(0, 0, -1) // За день до to
+		fromTime = filters.From
+	}
+
+	// Валидация: to должно быть после from
+	if !filters.From.IsZero() && !filters.To.IsZero() {
+		if filters.To.Before(filters.From) {
+			c.JSON(http.StatusBadRequest, errorResponse("to time must be after from time"))
+			return
+		}
 	}
 
 	// Права доступа: подрядчики видят только свои события
@@ -1270,6 +1280,11 @@ func (h *Handler) getReports(c *gin.Context) {
 	// Получаем отчеты
 	result, err := h.anprService.GetReports(c.Request.Context(), filters)
 	if err != nil {
+		if errors.Is(err, service.ErrInvalidInput) {
+			h.log.Warn().Err(err).Msg("invalid input for reports query")
+			c.JSON(http.StatusBadRequest, errorResponse(err.Error()))
+			return
+		}
 		h.log.Error().Err(err).Msg("failed to get reports")
 		c.JSON(http.StatusInternalServerError, errorResponse("internal error"))
 		return
