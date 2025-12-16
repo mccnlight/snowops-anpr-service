@@ -71,6 +71,16 @@ var migrationStatements = []string{
 	END
 	$$;`,
 	`CREATE INDEX IF NOT EXISTS idx_anpr_events_polygon_id ON anpr_events(polygon_id) WHERE polygon_id IS NOT NULL;`,
+	// Добавляем столбец contractor_id, если его нет (для привязки к подрядчику)
+	`DO $$
+	BEGIN
+		IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+			WHERE table_name = 'anpr_events' AND column_name = 'contractor_id') THEN
+			ALTER TABLE anpr_events ADD COLUMN contractor_id UUID;
+		END IF;
+	END
+	$$;`,
+	`CREATE INDEX IF NOT EXISTS idx_anpr_events_contractor_id ON anpr_events(contractor_id) WHERE contractor_id IS NOT NULL;`,
 	`ALTER TABLE anpr_events ADD COLUMN IF NOT EXISTS vehicle_brand TEXT;`,
 	`ALTER TABLE anpr_events ADD COLUMN IF NOT EXISTS vehicle_model TEXT;`,
 	`ALTER TABLE anpr_events ADD COLUMN IF NOT EXISTS vehicle_country TEXT;`,

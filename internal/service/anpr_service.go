@@ -212,8 +212,14 @@ func (s *ANPRService) ProcessIncomingEvent(ctx context.Context, payload anpr.Eve
 		event.MatchedSnow = payload.MatchedSnow
 	}
 
+	// Получаем contractor_id из vehicleData, если транспорт найден
+	var contractorID *uuid.UUID
+	if vehicleExists && vehicleData != nil {
+		contractorID = vehicleData.ContractorID
+	}
+
 	// Сохраняем событие с данными из vehicles (если vehicle найден)
-	if err := s.repo.CreateANPREvent(ctx, event); err != nil {
+	if err := s.repo.CreateANPREvent(ctx, event, contractorID); err != nil {
 		s.log.Error().
 			Err(err).
 			Str("plate", normalized).
@@ -660,4 +666,87 @@ type EventInfo struct {
 	ContractorID   *string `json:"contractor_id,omitempty"`
 	ContractorName *string `json:"contractor_name,omitempty"`
 	ContractorBIN  *string `json:"contractor_bin,omitempty"`
+}
+
+// GetReports получает отчеты с фильтрацией
+func (s *ANPRService) GetReports(ctx context.Context, filters repository.ReportFilters) (*ReportResult, error) {
+	// Получаем статистику
+	stats, err := s.repo.GetReportStats(ctx, filters)
+	if err != nil {
+		s.log.Error().Err(err).Msg("failed to get report stats")
+		return nil, fmt.Errorf("failed to get report stats: %w", err)
+	}
+
+	// Получаем события
+	events, err := s.repo.GetReportEvents(ctx, filters)
+	if err != nil {
+		s.log.Error().Err(err).Msg("failed to get report events")
+		return nil, fmt.Errorf("failed to get report events: %w", err)
+	}
+
+	// Преобразуем события в формат для ответа
+	reportEvents := make([]ReportEventInfo, 0, len(events))
+	for _, e := range events {
+		var vehicleID *string
+		if e.VehicleID != nil {
+			id := e.VehicleID.String()
+			vehicleID = &id
+		}
+		var contractorID *string
+		if e.ContractorID != nil {
+			id := e.ContractorID.String()
+			contractorID = &id
+		}
+		var polygonID *string
+		if e.PolygonID != nil {
+			id := e.PolygonID.String()
+			polygonID = &id
+		}
+
+		reportEvents = append(reportEvents, ReportEventInfo{
+			ID:              e.ID.String(),
+			EventTime:       e.EventTime,
+			PlateNumber:     e.NormalizedPlate,
+			RawPlate:        e.RawPlate,
+			VehicleBrand:     e.VehicleBrand,
+			VehicleModel:     e.VehicleModel,
+			ContractorID:    contractorID,
+			ContractorName:   e.ContractorName,
+			PolygonID:       polygonID,
+			SnowVolumeM3:    e.SnowVolumeM3,
+			PlatePhotoURL:   e.PlatePhotoURL,
+			BodyPhotoURL:    e.BodyPhotoURL,
+			VehicleID:       vehicleID,
+		})
+	}
+
+	return &ReportResult{
+		TotalVolume: stats.TotalVolume,
+		TripCount:   stats.TripCount,
+		Events:      reportEvents,
+	}, nil
+}
+
+// ReportResult содержит результат отчета
+type ReportResult struct {
+	TotalVolume float64           `json:"total_volume"`
+	TripCount   int64             `json:"trip_count"`
+	Events      []ReportEventInfo  `json:"events"`
+}
+
+// ReportEventInfo содержит информацию о событии для отчета
+type ReportEventInfo struct {
+	ID              string    `json:"id"`
+	EventTime       time.Time `json:"event_time"`
+	PlateNumber     string    `json:"plate_number"`
+	RawPlate        string    `json:"raw_plate"`
+	VehicleBrand    *string   `json:"vehicle_brand,omitempty"`
+	VehicleModel     *string   `json:"vehicle_model,omitempty"`
+	ContractorID    *string   `json:"contractor_id,omitempty"`
+	ContractorName  *string   `json:"contractor_name,omitempty"`
+	PolygonID       *string   `json:"polygon_id,omitempty"`
+	SnowVolumeM3    *float64  `json:"snow_volume_m3,omitempty"`
+	PlatePhotoURL   *string   `json:"plate_photo_url,omitempty"`
+	BodyPhotoURL    *string   `json:"body_photo_url,omitempty"`
+	VehicleID       *string   `json:"vehicle_id,omitempty"`
 }

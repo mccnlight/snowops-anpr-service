@@ -21,6 +21,7 @@ import (
 	"anpr-service/internal/config"
 	"anpr-service/internal/domain/anpr"
 	"anpr-service/internal/http/middleware"
+	"anpr-service/internal/repository"
 	"anpr-service/internal/service"
 	"anpr-service/internal/storage"
 	"anpr-service/internal/utils"
@@ -67,6 +68,7 @@ func (h *Handler) Register(r *gin.Engine, authMiddleware gin.HandlerFunc) {
 		protected.POST("/anpr/sync-vehicle", h.syncVehicleToWhitelist)
 		protected.DELETE("/anpr/events/old", h.deleteOldEvents)
 		protected.DELETE("/anpr/events/all", h.deleteAllEvents)
+		protected.GET("/reports", h.getReports)
 	}
 
 	// Internal endpoints (для межсервисного взаимодействия)
@@ -1147,4 +1149,131 @@ func maskPassword(url string) string {
 		}
 	}
 	return url
+}
+
+func (h *Handler) getReports(c *gin.Context) {
+	// Получаем Principal для проверки прав доступа
+	principal, ok := middleware.MustPrincipal(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, errorResponse("unauthorized"))
+		return
+	}
+
+	// Парсим фильтры из query параметров
+	filters := repository.ReportFilters{}
+
+	// Фильтр по подрядчику
+	if contractorIDStr := strings.TrimSpace(c.Query("contractor_id")); contractorIDStr != "" {
+		contractorID, err := uuid.Parse(contractorIDStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, errorResponse("invalid contractor_id"))
+			return
+		}
+		filters.ContractorID = &contractorID
+	}
+
+	// Фильтр по полигону
+	if polygonIDStr := strings.TrimSpace(c.Query("polygon_id")); polygonIDStr != "" {
+		polygonID, err := uuid.Parse(polygonIDStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, errorResponse("invalid polygon_id"))
+			return
+		}
+		filters.PolygonID = &polygonID
+	}
+
+	// Фильтр по vehicle_id
+	if vehicleIDStr := strings.TrimSpace(c.Query("vehicle_id")); vehicleIDStr != "" {
+		vehicleID, err := uuid.Parse(vehicleIDStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, errorResponse("invalid vehicle_id"))
+			return
+		}
+		filters.VehicleID = &vehicleID
+	}
+
+	// Фильтр по номеру (поиск)
+	if plateNumber := strings.TrimSpace(c.Query("plate")); plateNumber != "" {
+		filters.PlateNumber = &plateNumber
+	}
+
+	// Фильтр по периоду
+	var fromTime, toTime time.Time
+	if fromStr := strings.TrimSpace(c.Query("from")); fromStr != "" {
+		t, err := time.Parse(time.RFC3339, fromStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, errorResponse("invalid from time format, use RFC3339"))
+			return
+		}
+		fromTime = t
+		filters.From = fromTime
+	}
+
+	if toStr := strings.TrimSpace(c.Query("to")); toStr != "" {
+		t, err := time.Parse(time.RFC3339, toStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, errorResponse("invalid to time format, use RFC3339"))
+			return
+		}
+		toTime = t
+		filters.To = toTime
+	}
+
+	// Если период не указан, используем последние 24 часа по умолчанию
+	if fromTime.IsZero() && toTime.IsZero() {
+		now := time.Now()
+		toTime = now
+		fromTime = now.AddDate(0, 0, -1) // Последние 24 часа
+		filters.From = fromTime
+		filters.To = toTime
+	}
+
+	// Если указан только один из периодов, используем его как границу
+	if !fromTime.IsZero() && toTime.IsZero() {
+		filters.To = time.Now()
+	}
+	if fromTime.IsZero() && !toTime.IsZero() {
+		filters.From = toTime.AddDate(0, 0, -1) // За день до to
+	}
+
+	// Права доступа: подрядчики видят только свои события
+	if principal.IsContractor() {
+		// Подрядчик видит только события своих машин
+		filters.ContractorID = &principal.OrgID
+		filters.OnlyAssigned = true
+	} else {
+		// Админы/КГУ видят все события, включая непривязанные
+		// Если не указан фильтр по подрядчику, показываем все
+		filters.OnlyAssigned = false
+	}
+
+	// Пагинация
+	limit := 100
+	if l := c.Query("limit"); l != "" {
+		if parsed, err := parseInt(l); err == nil && parsed > 0 {
+			limit = parsed
+			if limit > 1000 {
+				limit = 1000 // Максимум 1000 записей
+			}
+		}
+	}
+	filters.Limit = limit
+
+	offset := 0
+	if o := c.Query("offset"); o != "" {
+		if parsed, err := parseInt(o); err == nil && parsed >= 0 {
+			offset = parsed
+		}
+	}
+	filters.Offset = offset
+
+	// Получаем отчеты
+	result, err := h.anprService.GetReports(c.Request.Context(), filters)
+	if err != nil {
+		h.log.Error().Err(err).Msg("failed to get reports")
+		c.JSON(http.StatusInternalServerError, errorResponse("internal error"))
+		return
+	}
+
+	c.JSON(http.StatusOK, successResponse(result))
 }
