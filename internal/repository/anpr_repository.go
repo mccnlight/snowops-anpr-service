@@ -56,6 +56,7 @@ type ANPREvent struct {
 	CameraID          string     `gorm:"not null"`
 	CameraUUID        *uuid.UUID `gorm:"type:uuid"`
 	PolygonID         *uuid.UUID `gorm:"type:uuid"`
+	ContractorID      *uuid.UUID `gorm:"type:uuid"` // ID организации (подрядчика), к которой принадлежит машина
 	CameraModel       *string
 	Direction         *string
 	Lane              *int
@@ -101,6 +102,7 @@ type VehicleData struct {
 	Color        string
 	Year         int
 	BodyVolumeM3 float64
+	ContractorID *uuid.UUID // ID организации (подрядчика), к которой принадлежит машина
 }
 
 type EventPhoto struct {
@@ -133,7 +135,7 @@ func (r *ANPRRepository) GetOrCreatePlate(ctx context.Context, normalized, origi
 	return plate.ID, nil
 }
 
-func (r *ANPRRepository) CreateANPREvent(ctx context.Context, event *anpr.Event) error {
+func (r *ANPRRepository) CreateANPREvent(ctx context.Context, event *anpr.Event, contractorID *uuid.UUID) error {
 	dbEvent := ANPREvent{
 		ID:              event.ID, // Use pre-generated ID
 		PlateID:         &event.PlateID,
@@ -141,6 +143,7 @@ func (r *ANPRRepository) CreateANPREvent(ctx context.Context, event *anpr.Event)
 		RawPlate:        event.Plate,
 		NormalizedPlate: event.NormalizedPlate,
 		EventTime:       event.EventTime,
+		ContractorID:    contractorID, // Сохраняем ID подрядчика напрямую в событии
 		CreatedAt:       time.Now(),
 	}
 
@@ -323,11 +326,12 @@ func (r *ANPRRepository) GetVehicleByPlate(ctx context.Context, normalizedPlate 
 		Color        string
 		Year         int
 		BodyVolumeM3 float64
+		ContractorID *uuid.UUID
 	}
 
 	err := r.db.WithContext(ctx).
 		Table("vehicles").
-		Select("brand, model, color, year, body_volume_m3").
+		Select("brand, model, color, year, body_volume_m3, contractor_id").
 		Where("is_active = ? AND normalize_plate_number(plate_number) = ?", true, normalizedPlate).
 		First(&vehicle).Error
 
@@ -344,6 +348,7 @@ func (r *ANPRRepository) GetVehicleByPlate(ctx context.Context, normalizedPlate 
 		Color:        vehicle.Color,
 		Year:         vehicle.Year,
 		BodyVolumeM3: vehicle.BodyVolumeM3,
+		ContractorID: vehicle.ContractorID,
 	}, nil
 }
 
@@ -422,4 +427,143 @@ func (r *ANPRRepository) GetEventPhotos(ctx context.Context, eventID uuid.UUID) 
 		Order("display_order ASC").
 		Find(&photos).Error
 	return photos, err
+}
+
+// ReportEvent представляет событие для отчетов с данными о транспорте и подрядчике
+type ReportEvent struct {
+	ANPREvent
+	VehicleID       *uuid.UUID `gorm:"column:vehicle_id"`
+	ContractorID    *uuid.UUID `gorm:"column:contractor_id"`
+	ContractorName *string    `gorm:"column:contractor_name"`
+	VehicleBrand    *string
+	VehicleModel    *string
+	PlatePhotoURL   *string `gorm:"column:plate_photo_url"`
+	BodyPhotoURL    *string `gorm:"column:body_photo_url"`
+}
+
+// GetReportEvents получает события для отчетов с фильтрацией
+func (r *ANPRRepository) GetReportEvents(ctx context.Context, filters ReportFilters) ([]ReportEvent, error) {
+	query := r.db.WithContext(ctx).
+		Table("anpr_events AS e").
+		Select(`
+			e.*,
+			v.id AS vehicle_id,
+			COALESCE(e.contractor_id, v.contractor_id) AS contractor_id,
+			o.name AS contractor_name,
+			v.brand AS vehicle_brand,
+			v.model AS vehicle_model,
+			(SELECT photo_url FROM anpr_event_photos WHERE event_id = e.id AND display_order = 0 LIMIT 1) AS plate_photo_url,
+			(SELECT photo_url FROM anpr_event_photos WHERE event_id = e.id AND display_order = 1 LIMIT 1) AS body_photo_url
+		`).
+		Joins("LEFT JOIN vehicles v ON normalize_plate_number(v.plate_number) = e.normalized_plate AND v.is_active = true").
+		Joins("LEFT JOIN organizations o ON o.id = COALESCE(e.contractor_id, v.contractor_id)").
+		Where("e.snow_volume_m3 IS NOT NULL AND e.snow_volume_m3 > 0") // Только события с объемом
+
+	// Фильтр по подрядчику (если указан)
+	// Используем поле contractor_id из anpr_events (если есть), иначе через JOIN с vehicles
+	if filters.ContractorID != nil {
+		query = query.Where("(e.contractor_id = ? OR v.contractor_id = ?)", *filters.ContractorID, *filters.ContractorID)
+	}
+
+	// Фильтр по полигону
+	if filters.PolygonID != nil {
+		query = query.Where("e.polygon_id = ?", *filters.PolygonID)
+	}
+
+	// Фильтр по периоду
+	if !filters.From.IsZero() {
+		query = query.Where("e.event_time >= ?", filters.From)
+	}
+	if !filters.To.IsZero() {
+		query = query.Where("e.event_time <= ?", filters.To)
+	}
+
+	// Фильтр по номеру (поиск)
+	if filters.PlateNumber != nil && *filters.PlateNumber != "" {
+		normalized := fmt.Sprintf("%%%s%%", *filters.PlateNumber)
+		query = query.Where("e.normalized_plate LIKE ? OR e.raw_plate LIKE ?", normalized, normalized)
+	}
+
+	// Фильтр по vehicle_id
+	if filters.VehicleID != nil {
+		query = query.Where("v.id = ?", *filters.VehicleID)
+	}
+
+	// Для подрядчиков показываем только привязанные события
+	if filters.OnlyAssigned {
+		query = query.Where("(e.contractor_id IS NOT NULL OR v.contractor_id IS NOT NULL)")
+	}
+
+	query = query.Order("e.event_time DESC")
+
+	if filters.Limit > 0 {
+		query = query.Limit(filters.Limit)
+	}
+	if filters.Offset > 0 {
+		query = query.Offset(filters.Offset)
+	}
+
+	var events []ReportEvent
+	err := query.Scan(&events).Error
+	return events, err
+}
+
+// GetReportStats получает статистику для отчетов (сумма объема, количество поездок)
+func (r *ANPRRepository) GetReportStats(ctx context.Context, filters ReportFilters) (*ReportStats, error) {
+	query := r.db.WithContext(ctx).
+		Table("anpr_events AS e").
+		Select(`
+			COALESCE(SUM(e.snow_volume_m3), 0) AS total_volume,
+			COUNT(*) AS trip_count
+		`).
+		Joins("LEFT JOIN vehicles v ON normalize_plate_number(v.plate_number) = e.normalized_plate AND v.is_active = true").
+		Where("e.snow_volume_m3 IS NOT NULL AND e.snow_volume_m3 > 0")
+
+	// Применяем те же фильтры, что и в GetReportEvents
+	// Используем поле contractor_id из anpr_events (если есть), иначе через JOIN с vehicles
+	if filters.ContractorID != nil {
+		query = query.Where("(e.contractor_id = ? OR v.contractor_id = ?)", *filters.ContractorID, *filters.ContractorID)
+	}
+	if filters.PolygonID != nil {
+		query = query.Where("e.polygon_id = ?", *filters.PolygonID)
+	}
+	if !filters.From.IsZero() {
+		query = query.Where("e.event_time >= ?", filters.From)
+	}
+	if !filters.To.IsZero() {
+		query = query.Where("e.event_time <= ?", filters.To)
+	}
+	if filters.PlateNumber != nil && *filters.PlateNumber != "" {
+		normalized := fmt.Sprintf("%%%s%%", *filters.PlateNumber)
+		query = query.Where("e.normalized_plate LIKE ? OR e.raw_plate LIKE ?", normalized, normalized)
+	}
+	if filters.VehicleID != nil {
+		query = query.Where("v.id = ?", *filters.VehicleID)
+	}
+	if filters.OnlyAssigned {
+		query = query.Where("(e.contractor_id IS NOT NULL OR v.contractor_id IS NOT NULL)")
+	}
+
+	var stats ReportStats
+	err := query.Scan(&stats).Error
+	return &stats, err
+}
+
+// ReportFilters содержит фильтры для отчетов
+type ReportFilters struct {
+	ContractorID  *uuid.UUID
+	PolygonID     *uuid.UUID
+	VehicleID     *uuid.UUID
+	PlateNumber   *string
+	From          time.Time
+	To            time.Time
+	OnlyAssigned  bool // Только привязанные события (для подрядчиков)
+	Limit         int
+	Offset        int
+}
+
+// ReportStats содержит статистику для отчетов
+type ReportStats struct {
+	TotalVolume float64 `gorm:"column:total_volume"`
+	TripCount   int64   `gorm:"column:trip_count"`
 }
