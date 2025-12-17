@@ -16,8 +16,9 @@ import (
 )
 
 var (
-	ErrInvalidInput = errors.New("invalid input")
-	ErrNotFound     = errors.New("not found")
+	ErrInvalidInput          = errors.New("invalid input")
+	ErrNotFound              = errors.New("not found")
+	ErrVehicleNotWhitelisted = errors.New("vehicle not whitelisted")
 )
 
 type ANPRService struct {
@@ -104,7 +105,9 @@ func (s *ANPRService) ProcessIncomingEvent(ctx context.Context, payload anpr.Eve
 	} else {
 		s.log.Warn().
 			Str("plate", normalized).
-			Msg("vehicle not found in vehicles table")
+			Msg("vehicle not found in vehicles table (whitelist check failed)")
+		// Если машина не найдена в vehicles — не сохраняем событие
+		return nil, fmt.Errorf("%w: vehicle not found in vehicles table", ErrVehicleNotWhitelisted)
 	}
 
 	cameraModel := payload.CameraModel

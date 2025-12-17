@@ -112,6 +112,15 @@ func (h *Handler) createANPREvent(c *gin.Context) {
 				c.JSON(http.StatusBadRequest, errorResponse(err.Error()))
 				return
 			}
+			if errors.Is(err, service.ErrVehicleNotWhitelisted) {
+				h.log.Warn().
+					Err(err).
+					Str("plate", payload.Plate).
+					Str("camera_id", payload.CameraID).
+					Msg("vehicle not in whitelist (vehicles table)")
+				c.JSON(http.StatusForbidden, errorResponse(err.Error()))
+				return
+			}
 			h.log.Error().
 				Err(err).
 				Str("plate", payload.Plate).
@@ -301,6 +310,15 @@ func (h *Handler) createANPREvent(c *gin.Context) {
 				Str("camera_id", payload.CameraID).
 				Msg("invalid input for ANPR event")
 			c.JSON(http.StatusBadRequest, errorResponse(err.Error()))
+			return
+		}
+		if errors.Is(err, service.ErrVehicleNotWhitelisted) {
+			h.log.Warn().
+				Err(err).
+				Str("plate", payload.Plate).
+				Str("camera_id", payload.CameraID).
+				Msg("vehicle not in whitelist (vehicles table)")
+			c.JSON(http.StatusForbidden, errorResponse(err.Error()))
 			return
 		}
 		h.log.Error().
@@ -605,6 +623,15 @@ func (h *Handler) createHikvisionEvent(c *gin.Context) {
 				Str("camera_id", payload.CameraID).
 				Msg("invalid input for Hikvision event")
 			c.JSON(http.StatusBadRequest, errorResponse(err.Error()))
+			return
+		}
+		if errors.Is(err, service.ErrVehicleNotWhitelisted) {
+			h.log.Warn().
+				Err(err).
+				Str("plate", payload.Plate).
+				Str("camera_id", payload.CameraID).
+				Msg("vehicle not in whitelist (vehicles table)")
+			c.JSON(http.StatusForbidden, errorResponse(err.Error()))
 			return
 		}
 		h.log.Error().
