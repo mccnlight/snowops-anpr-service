@@ -439,6 +439,21 @@ func (r *ANPRRepository) CheckVehicleExists(ctx context.Context, normalizedPlate
 	return vehicle != nil, nil
 }
 
+// ExistsRecentEvent проверяет, есть ли событие с тем же номером и камерой в окне +/- window
+func (r *ANPRRepository) ExistsRecentEvent(ctx context.Context, normalizedPlate, cameraID string, eventTime time.Time, window time.Duration) (bool, error) {
+	var count int64
+	start := eventTime.Add(-window)
+	end := eventTime.Add(window)
+	err := r.db.WithContext(ctx).
+		Model(&ANPREvent{}).
+		Where("normalized_plate = ? AND camera_id = ? AND event_time BETWEEN ? AND ?", normalizedPlate, cameraID, start, end).
+		Count(&count).Error
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 // DeleteOldEvents удаляет события старше указанного количества дней
 func (r *ANPRRepository) DeleteOldEvents(ctx context.Context, days int) (int64, error) {
 	cutoffTime := time.Now().AddDate(0, 0, -days)

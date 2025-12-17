@@ -112,6 +112,15 @@ func (h *Handler) createANPREvent(c *gin.Context) {
 				c.JSON(http.StatusBadRequest, errorResponse(err.Error()))
 				return
 			}
+			if errors.Is(err, service.ErrDuplicateEvent) {
+				h.log.Warn().
+					Err(err).
+					Str("plate", payload.Plate).
+					Str("camera_id", payload.CameraID).
+					Msg("duplicate event within 5 minutes, skipping save")
+				c.JSON(http.StatusConflict, errorResponse(err.Error()))
+				return
+			}
 			if errors.Is(err, service.ErrVehicleNotWhitelisted) {
 				h.log.Warn().
 					Err(err).
@@ -310,6 +319,15 @@ func (h *Handler) createANPREvent(c *gin.Context) {
 				Str("camera_id", payload.CameraID).
 				Msg("invalid input for ANPR event")
 			c.JSON(http.StatusBadRequest, errorResponse(err.Error()))
+			return
+		}
+		if errors.Is(err, service.ErrDuplicateEvent) {
+			h.log.Warn().
+				Err(err).
+				Str("plate", payload.Plate).
+				Str("camera_id", payload.CameraID).
+				Msg("duplicate event within 5 minutes, skipping save")
+			c.JSON(http.StatusConflict, errorResponse(err.Error()))
 			return
 		}
 		if errors.Is(err, service.ErrVehicleNotWhitelisted) {
