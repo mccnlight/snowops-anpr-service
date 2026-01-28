@@ -701,24 +701,9 @@ func (s *ANPRService) GetReports(ctx context.Context, filters repository.ReportF
 		return nil, fmt.Errorf("failed to get report events: %w", err)
 	}
 
-	// Загружаем все фото для событий одним запросом
-	photoURLsByEventID := map[uuid.UUID][]string{}
-	if len(events) > 0 {
-		eventIDs := make([]uuid.UUID, 0, len(events))
-		for _, e := range events {
-			eventIDs = append(eventIDs, e.ID)
-		}
-		if photos, err := s.repo.GetEventPhotosByEventIDs(ctx, eventIDs); err != nil {
-			s.log.Warn().Err(err).Msg("failed to get report event photos")
-		} else {
-			photoURLsByEventID = photos
-		}
-	}
-
 	// Преобразуем события в формат для ответа
 	reportEvents := make([]ReportEventInfo, 0, len(events))
 	for _, e := range events {
-		photos := photoURLsByEventID[e.ID]
 		var plateID *string
 		if e.PlateID != nil {
 			id := e.PlateID.String()
@@ -766,7 +751,6 @@ func (s *ANPRService) GetReports(ctx context.Context, filters repository.ReportF
 			SnowVolumeM3:      e.SnowVolumeM3,
 			PlatePhotoURL:     e.PlatePhotoURL,
 			BodyPhotoURL:      e.BodyPhotoURL,
-			Photos:            photos,
 			VehicleID:         vehicleID,
 		})
 	}
@@ -812,6 +796,5 @@ type ReportEventInfo struct {
 	SnowVolumeM3      *float64  `json:"snow_volume_m3,omitempty"`
 	PlatePhotoURL     *string   `json:"plate_photo_url,omitempty"`
 	BodyPhotoURL      *string   `json:"body_photo_url,omitempty"`
-	Photos            []string  `json:"photos,omitempty"`
 	VehicleID         *string   `json:"vehicle_id,omitempty"`
 }

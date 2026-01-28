@@ -521,29 +521,6 @@ func (r *ANPRRepository) GetEventPhotos(ctx context.Context, eventID uuid.UUID) 
 	return photos, err
 }
 
-// GetEventPhotosByEventIDs получает фотографии для набора событий
-func (r *ANPRRepository) GetEventPhotosByEventIDs(ctx context.Context, eventIDs []uuid.UUID) (map[uuid.UUID][]string, error) {
-	if len(eventIDs) == 0 {
-		return map[uuid.UUID][]string{}, nil
-	}
-
-	var photos []EventPhoto
-	err := r.db.WithContext(ctx).
-		Where("event_id IN ?", eventIDs).
-		Order("event_id, display_order ASC").
-		Find(&photos).Error
-	if err != nil {
-		return nil, err
-	}
-
-	result := make(map[uuid.UUID][]string, len(eventIDs))
-	for _, p := range photos {
-		result[p.EventID] = append(result[p.EventID], p.PhotoURL)
-	}
-
-	return result, nil
-}
-
 // ReportEvent представляет событие для отчетов с данными о транспорте и подрядчике
 type ReportEvent struct {
 	ANPREvent
