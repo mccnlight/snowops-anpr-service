@@ -701,9 +701,29 @@ func (s *ANPRService) GetReports(ctx context.Context, filters repository.ReportF
 		return nil, fmt.Errorf("failed to get report events: %w", err)
 	}
 
+	// Загружаем все фото для событий одним запросом
+	photoURLsByEventID := map[uuid.UUID][]string{}
+	if len(events) > 0 {
+		eventIDs := make([]uuid.UUID, 0, len(events))
+		for _, e := range events {
+			eventIDs = append(eventIDs, e.ID)
+		}
+		if photos, err := s.repo.GetEventPhotosByEventIDs(ctx, eventIDs); err != nil {
+			s.log.Warn().Err(err).Msg("failed to get report event photos")
+		} else {
+			photoURLsByEventID = photos
+		}
+	}
+
 	// Преобразуем события в формат для ответа
 	reportEvents := make([]ReportEventInfo, 0, len(events))
 	for _, e := range events {
+		photos := photoURLsByEventID[e.ID]
+		var plateID *string
+		if e.PlateID != nil {
+			id := e.PlateID.String()
+			plateID = &id
+		}
 		var vehicleID *string
 		if e.VehicleID != nil {
 			id := e.VehicleID.String()
@@ -721,19 +741,33 @@ func (s *ANPRService) GetReports(ctx context.Context, filters repository.ReportF
 		}
 
 		reportEvents = append(reportEvents, ReportEventInfo{
-			ID:             e.ID.String(),
-			EventTime:      e.EventTime,
-			PlateNumber:    e.NormalizedPlate,
-			RawPlate:       e.RawPlate,
-			VehicleBrand:   e.VehicleBrand,
-			VehicleModel:   e.VehicleModel,
-			ContractorID:   contractorID,
-			ContractorName: e.ContractorName,
-			PolygonID:      polygonID,
-			SnowVolumeM3:   e.SnowVolumeM3,
-			PlatePhotoURL:  e.PlatePhotoURL,
-			BodyPhotoURL:   e.BodyPhotoURL,
-			VehicleID:      vehicleID,
+			ID:                e.ID.String(),
+			EventTime:         e.EventTime,
+			PlateNumber:       e.NormalizedPlate,
+			RawPlate:          e.RawPlate,
+			NormalizedPlate:   e.NormalizedPlate,
+			PlateID:           plateID,
+			CameraID:          e.CameraID,
+			CameraModel:       e.CameraModel,
+			Direction:         e.Direction,
+			Lane:              e.Lane,
+			Confidence:        e.Confidence,
+			VehicleColor:      e.VehicleColor,
+			VehicleType:       e.VehicleType,
+			VehicleBrand:      e.VehicleBrand,
+			VehicleModel:      e.VehicleModel,
+			VehicleCountry:    e.VehicleCountry,
+			VehiclePlateColor: e.VehiclePlateColor,
+			VehicleSpeed:      e.VehicleSpeed,
+			SnapshotURL:       e.SnapshotURL,
+			ContractorID:      contractorID,
+			ContractorName:    e.ContractorName,
+			PolygonID:         polygonID,
+			SnowVolumeM3:      e.SnowVolumeM3,
+			PlatePhotoURL:     e.PlatePhotoURL,
+			BodyPhotoURL:      e.BodyPhotoURL,
+			Photos:            photos,
+			VehicleID:         vehicleID,
 		})
 	}
 
@@ -753,17 +787,31 @@ type ReportResult struct {
 
 // ReportEventInfo содержит информацию о событии для отчета
 type ReportEventInfo struct {
-	ID             string    `json:"id"`
-	EventTime      time.Time `json:"event_time"`
-	PlateNumber    string    `json:"plate_number"`
-	RawPlate       string    `json:"raw_plate"`
-	VehicleBrand   *string   `json:"vehicle_brand,omitempty"`
-	VehicleModel   *string   `json:"vehicle_model,omitempty"`
-	ContractorID   *string   `json:"contractor_id,omitempty"`
-	ContractorName *string   `json:"contractor_name,omitempty"`
-	PolygonID      *string   `json:"polygon_id,omitempty"`
-	SnowVolumeM3   *float64  `json:"snow_volume_m3,omitempty"`
-	PlatePhotoURL  *string   `json:"plate_photo_url,omitempty"`
-	BodyPhotoURL   *string   `json:"body_photo_url,omitempty"`
-	VehicleID      *string   `json:"vehicle_id,omitempty"`
+	ID                string    `json:"id"`
+	EventTime         time.Time `json:"event_time"`
+	PlateNumber       string    `json:"plate_number"`
+	RawPlate          string    `json:"raw_plate"`
+	NormalizedPlate   string    `json:"normalized_plate"`
+	PlateID           *string   `json:"plate_id,omitempty"`
+	CameraID          string    `json:"camera_id"`
+	CameraModel       *string   `json:"camera_model,omitempty"`
+	Direction         *string   `json:"direction,omitempty"`
+	Lane              *int      `json:"lane,omitempty"`
+	Confidence        *float64  `json:"confidence,omitempty"`
+	VehicleColor      *string   `json:"vehicle_color,omitempty"`
+	VehicleType       *string   `json:"vehicle_type,omitempty"`
+	VehicleBrand      *string   `json:"vehicle_brand,omitempty"`
+	VehicleModel      *string   `json:"vehicle_model,omitempty"`
+	VehicleCountry    *string   `json:"vehicle_country,omitempty"`
+	VehiclePlateColor *string   `json:"vehicle_plate_color,omitempty"`
+	VehicleSpeed      *float64  `json:"vehicle_speed,omitempty"`
+	SnapshotURL       *string   `json:"snapshot_url,omitempty"`
+	ContractorID      *string   `json:"contractor_id,omitempty"`
+	ContractorName    *string   `json:"contractor_name,omitempty"`
+	PolygonID         *string   `json:"polygon_id,omitempty"`
+	SnowVolumeM3      *float64  `json:"snow_volume_m3,omitempty"`
+	PlatePhotoURL     *string   `json:"plate_photo_url,omitempty"`
+	BodyPhotoURL      *string   `json:"body_photo_url,omitempty"`
+	Photos            []string  `json:"photos,omitempty"`
+	VehicleID         *string   `json:"vehicle_id,omitempty"`
 }
