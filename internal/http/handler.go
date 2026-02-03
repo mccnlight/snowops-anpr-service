@@ -69,6 +69,7 @@ func (h *Handler) Register(r *gin.Engine, authMiddleware gin.HandlerFunc) {
 		protected.DELETE("/anpr/events/old", h.deleteOldEvents)
 		protected.DELETE("/anpr/events/all", h.deleteAllEvents)
 		protected.GET("/reports", h.getReports)
+		protected.GET("/reports/excel", h.exportReportsExcel)
 	}
 
 	// Internal endpoints (для межсервисного взаимодействия)
@@ -1336,4 +1337,147 @@ func (h *Handler) getReports(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, successResponse(result))
+}
+
+func (h *Handler) exportReportsExcel(c *gin.Context) {
+	// Получаем Principal для проверки прав доступа
+	principal, ok := middleware.MustPrincipal(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, errorResponse("unauthorized"))
+		return
+	}
+
+	// Парсим фильтры из query параметров (аналогично getReports)
+	filters := repository.ReportFilters{}
+
+	// Фильтр по подрядчику
+	if contractorIDStr := strings.TrimSpace(c.Query("contractor_id")); contractorIDStr != "" {
+		contractorID, err := uuid.Parse(contractorIDStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, errorResponse("invalid contractor_id"))
+			return
+		}
+		filters.ContractorID = &contractorID
+	}
+
+	// Фильтр по полигону
+	if polygonIDStr := strings.TrimSpace(c.Query("polygon_id")); polygonIDStr != "" {
+		polygonID, err := uuid.Parse(polygonIDStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, errorResponse("invalid polygon_id"))
+			return
+		}
+		filters.PolygonID = &polygonID
+	}
+
+	// Фильтр по vehicle_id
+	if vehicleIDStr := strings.TrimSpace(c.Query("vehicle_id")); vehicleIDStr != "" {
+		vehicleID, err := uuid.Parse(vehicleIDStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, errorResponse("invalid vehicle_id"))
+			return
+		}
+		filters.VehicleID = &vehicleID
+	}
+
+	// Фильтр по номеру (поиск)
+	if plateNumber := strings.TrimSpace(c.Query("plate")); plateNumber != "" {
+		filters.PlateNumber = &plateNumber
+	}
+
+	// Фильтр по периоду
+	var fromTime, toTime time.Time
+	if fromStr := strings.TrimSpace(c.Query("from")); fromStr != "" {
+		t, err := time.Parse(time.RFC3339, fromStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, errorResponse("invalid from time format, use RFC3339"))
+			return
+		}
+		fromTime = t
+		filters.From = fromTime
+	}
+
+	if toStr := strings.TrimSpace(c.Query("to")); toStr != "" {
+		t, err := time.Parse(time.RFC3339, toStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, errorResponse("invalid to time format, use RFC3339"))
+			return
+		}
+		toTime = t
+		filters.To = toTime
+	}
+
+	// Если период не указан, используем последние 24 часа по умолчанию
+	if fromTime.IsZero() && toTime.IsZero() {
+		now := time.Now()
+		toTime = now
+		fromTime = now.AddDate(0, 0, -1) // Последние 24 часа
+		filters.From = fromTime
+		filters.To = toTime
+	}
+
+	// Если указан только один из периодов, используем его как границу
+	if !fromTime.IsZero() && toTime.IsZero() {
+		filters.To = time.Now()
+		toTime = filters.To
+	}
+	if fromTime.IsZero() && !toTime.IsZero() {
+		filters.From = toTime.AddDate(0, 0, -1) // За день до to
+		fromTime = filters.From
+	}
+
+	// Валидация: to должно быть после from
+	if !filters.From.IsZero() && !filters.To.IsZero() {
+		if filters.To.Before(filters.From) {
+			c.JSON(http.StatusBadRequest, errorResponse("to time must be after from time"))
+			return
+		}
+	}
+
+	// Защита от больших выгрузок: максимум 30 дней
+	if !filters.From.IsZero() && !filters.To.IsZero() {
+		daysDiff := filters.To.Sub(filters.From).Hours() / 24
+		if daysDiff > 30 {
+			c.JSON(http.StatusBadRequest, errorResponse("date range cannot exceed 30 days"))
+			return
+		}
+	}
+
+	// Права доступа: подрядчики видят только свои события
+	if principal.IsContractor() {
+		// Подрядчик видит только события своих машин
+		filters.ContractorID = &principal.OrgID
+		filters.OnlyAssigned = true
+	} else {
+		// Админы/КГУ видят все события, включая непривязанные
+		// Если не указан фильтр по подрядчику, показываем все
+		filters.OnlyAssigned = false
+	}
+
+	// Для Excel limit/offset из query НЕ используем - используем внутреннюю пагинацию
+	// Но проверяем максимальное количество строк (100k)
+	filters.MaxRows = 100000
+
+	// Генерируем Excel файл
+	excelData, filename, err := h.anprService.ExportReportsExcel(c.Request.Context(), filters)
+	if err != nil {
+		if errors.Is(err, service.ErrInvalidInput) {
+			h.log.Warn().Err(err).Msg("invalid input for excel export")
+			c.JSON(http.StatusBadRequest, errorResponse(err.Error()))
+			return
+		}
+		if errors.Is(err, service.ErrTooManyRows) {
+			h.log.Warn().Err(err).Msg("too many rows for excel export")
+			c.JSON(http.StatusBadRequest, errorResponse(err.Error()))
+			return
+		}
+		h.log.Error().Err(err).Msg("failed to export reports to excel")
+		c.JSON(http.StatusInternalServerError, errorResponse("internal error"))
+		return
+	}
+
+	// Устанавливаем заголовки для скачивания файла
+	c.Header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+	c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelData)
 }

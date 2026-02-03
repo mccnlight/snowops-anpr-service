@@ -652,10 +652,117 @@ type ReportFilters struct {
 	OnlyAssigned  bool // Только привязанные события (для подрядчиков)
 	Limit         int
 	Offset        int
+	MaxRows       int // Максимальное количество строк для экспорта
 }
 
 // ReportStats содержит статистику для отчетов
 type ReportStats struct {
 	TotalVolume float64 `gorm:"column:total_volume"`
 	TripCount   int64   `gorm:"column:trip_count"`
+}
+
+// GetReportEventsForExcel получает события для Excel выгрузки порциями с правильной сортировкой
+// Сортировка: contractor_id ASC NULLS LAST, normalized_plate ASC, event_time DESC
+// Работает без таблиц vehicles и organizations (использует только данные из anpr_events)
+func (r *ANPRRepository) GetReportEventsForExcel(ctx context.Context, filters ReportFilters, pageSize, offset int) ([]ReportEvent, error) {
+	query := r.db.WithContext(ctx).
+		Table("anpr_events AS e").
+		Select(`
+			e.*,
+			NULL::UUID AS vehicle_id,
+			e.contractor_id AS contractor_id,
+			o.name AS contractor_name,
+			e.vehicle_brand AS vehicle_brand,
+			e.vehicle_model AS vehicle_model,
+			(SELECT photo_url FROM anpr_event_photos WHERE event_id = e.id AND display_order = 0 LIMIT 1) AS plate_photo_url,
+			(SELECT photo_url FROM anpr_event_photos WHERE event_id = e.id AND display_order = 1 LIMIT 1) AS body_photo_url
+		`).
+		Joins("LEFT JOIN organizations o ON o.id = e.contractor_id")
+	// Для Excel выгрузки показываем все события, не только с snow_volume_m3 > 0
+
+	// Фильтр по подрядчику (если указан)
+	if filters.ContractorID != nil {
+		query = query.Where("e.contractor_id = ?", *filters.ContractorID)
+	}
+
+	// Фильтр по полигону
+	if filters.PolygonID != nil {
+		query = query.Where("e.polygon_id = ?", *filters.PolygonID)
+	}
+
+	// Фильтр по периоду
+	if !filters.From.IsZero() {
+		query = query.Where("e.event_time >= ?", filters.From)
+	}
+	if !filters.To.IsZero() {
+		query = query.Where("e.event_time <= ?", filters.To)
+	}
+
+	// Фильтр по номеру (поиск)
+	if filters.PlateNumber != nil && *filters.PlateNumber != "" {
+		normalized := fmt.Sprintf("%%%s%%", *filters.PlateNumber)
+		query = query.Where("e.normalized_plate LIKE ? OR e.raw_plate LIKE ?", normalized, normalized)
+	}
+
+	// Фильтр по vehicle_id - пропускаем, так как нет таблицы vehicles
+	// if filters.VehicleID != nil {
+	//     query = query.Where("v.id = ?", *filters.VehicleID)
+	// }
+
+	// Для подрядчиков показываем только привязанные события
+	if filters.OnlyAssigned {
+		query = query.Where("e.contractor_id IS NOT NULL")
+	}
+
+	// Сортировка для группировки: contractor_name (NULLS LAST), plate, event_time
+	query = query.Order("o.name ASC NULLS LAST, e.normalized_plate ASC, e.event_time DESC")
+
+	// Пагинация
+	if pageSize > 0 {
+		query = query.Limit(pageSize)
+	}
+	if offset > 0 {
+		query = query.Offset(offset)
+	}
+
+	var events []ReportEvent
+	err := query.Scan(&events).Error
+	return events, err
+}
+
+// CountReportEventsForExcel подсчитывает общее количество событий для Excel выгрузки
+// Работает без таблиц vehicles и organizations (использует только данные из anpr_events)
+func (r *ANPRRepository) CountReportEventsForExcel(ctx context.Context, filters ReportFilters) (int64, error) {
+	query := r.db.WithContext(ctx).
+		Table("anpr_events AS e")
+		// Для Excel выгрузки показываем все события, не только с snow_volume_m3 > 0
+
+	// Применяем те же фильтры, что и в GetReportEventsForExcel
+	if filters.ContractorID != nil {
+		query = query.Where("e.contractor_id = ?", *filters.ContractorID)
+	}
+	if filters.PolygonID != nil {
+		query = query.Where("e.polygon_id = ?", *filters.PolygonID)
+	}
+	if !filters.From.IsZero() {
+		query = query.Where("e.event_time >= ?", filters.From)
+	}
+	if !filters.To.IsZero() {
+		query = query.Where("e.event_time <= ?", filters.To)
+	}
+	if filters.PlateNumber != nil && *filters.PlateNumber != "" {
+		normalized := fmt.Sprintf("%%%s%%", *filters.PlateNumber)
+		query = query.Where("e.normalized_plate LIKE ? OR e.raw_plate LIKE ?", normalized, normalized)
+	}
+	// Фильтр по vehicle_id - пропускаем, так как нет таблицы vehicles
+	// if filters.VehicleID != nil {
+	//     query = query.Where("v.id = ?", *filters.VehicleID)
+	// }
+	if filters.OnlyAssigned {
+		query = query.Where("e.contractor_id IS NOT NULL")
+	}
+
+	var count int64
+	err := query.Count(&count).Error
+	return count, err
 }

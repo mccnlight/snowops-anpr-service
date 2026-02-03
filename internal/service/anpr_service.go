@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
+	"github.com/xuri/excelize/v2"
 
 	"anpr-service/internal/domain/anpr"
 	"anpr-service/internal/repository"
@@ -20,6 +22,7 @@ var (
 	ErrNotFound              = errors.New("not found")
 	ErrVehicleNotWhitelisted = errors.New("vehicle not whitelisted")
 	ErrDuplicateEvent        = errors.New("duplicate recent event")
+	ErrTooManyRows           = errors.New("too many rows for export")
 )
 
 type ANPRService struct {
@@ -797,4 +800,401 @@ type ReportEventInfo struct {
 	PlatePhotoURL     *string   `json:"plate_photo_url,omitempty"`
 	BodyPhotoURL      *string   `json:"body_photo_url,omitempty"`
 	VehicleID         *string   `json:"vehicle_id,omitempty"`
+}
+
+// ExportReportsExcel экспортирует отчеты в Excel файл
+func (s *ANPRService) ExportReportsExcel(ctx context.Context, filters repository.ReportFilters) ([]byte, string, error) {
+	// Проверяем максимальное количество строк
+	if filters.MaxRows > 0 {
+		count, err := s.repo.CountReportEventsForExcel(ctx, filters)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to count events: %w", err)
+		}
+		if count > int64(filters.MaxRows) {
+			return nil, "", fmt.Errorf("%w: found %d rows, maximum allowed is %d", ErrTooManyRows, count, filters.MaxRows)
+		}
+	}
+
+	// Используем excelize для создания файла
+	excelData, filename, err := s.generateExcelReport(ctx, filters)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to generate excel report: %w", err)
+	}
+	return excelData, filename, nil
+}
+
+// generateExcelReport создает Excel файл с отчетами
+func (s *ANPRService) generateExcelReport(ctx context.Context, filters repository.ReportFilters) ([]byte, string, error) {
+	f := excelize.NewFile()
+	defer func() {
+		if err := f.Close(); err != nil {
+			s.log.Warn().Err(err).Msg("failed to close excel file")
+		}
+	}()
+
+	sheetName := "ANPR Events"
+	_, err := f.NewSheet(sheetName)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to create sheet: %w", err)
+	}
+	f.DeleteSheet("Sheet1") // Удаляем дефолтный лист
+
+	sw, err := f.NewStreamWriter(sheetName)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to create stream writer: %w", err)
+	}
+
+	// Стили
+	headerStyle, err := f.NewStyle(&excelize.Style{
+		Font: &excelize.Font{
+			Bold: true,
+		},
+	})
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to create header style: %w", err)
+	}
+
+	groupHeaderStyle, err := f.NewStyle(&excelize.Style{
+		Font: &excelize.Font{
+			Bold: true,
+			Size: 12,
+		},
+		Fill: excelize.Fill{
+			Type:    "pattern",
+			Color:   []string{"#E0E0E0"},
+			Pattern: 1,
+		},
+	})
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to create group header style: %w", err)
+	}
+
+	// Создаем стиль для даты/времени (будем применять после Flush)
+	customNumFmt := "yyyy-mm-dd hh:mm:ss"
+	dateTimeStyle, err := f.NewStyle(&excelize.Style{
+		CustomNumFmt: &customNumFmt,
+	})
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to create datetime style: %w", err)
+	}
+
+	// Заголовки
+	headers := []interface{}{"ТОО", "Машина", "Госномер", "Время события", "Процент", "Объем"}
+	cell, err := excelize.CoordinatesToCellName(1, 1)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to get cell name: %w", err)
+	}
+	if err := sw.SetRow(cell, headers, excelize.RowOpts{StyleID: headerStyle}); err != nil {
+		return nil, "", fmt.Errorf("failed to set header row: %w", err)
+	}
+
+	// Закрепляем верхнюю строку
+	if err := f.SetPanes(sheetName, &excelize.Panes{
+		Freeze:      true,
+		YSplit:      1,
+		TopLeftCell: "A2",
+		ActivePane:  "bottomLeft",
+	}); err != nil {
+		s.log.Warn().Err(err).Msg("failed to freeze panes")
+	}
+
+	// Устанавливаем ширину колонок
+	if err := f.SetColWidth(sheetName, "A", "A", 28); err != nil {
+		return nil, "", fmt.Errorf("failed to set column width: %w", err)
+	}
+	if err := f.SetColWidth(sheetName, "B", "B", 24); err != nil {
+		return nil, "", fmt.Errorf("failed to set column width: %w", err)
+	}
+	if err := f.SetColWidth(sheetName, "C", "C", 14); err != nil {
+		return nil, "", fmt.Errorf("failed to set column width: %w", err)
+	}
+	if err := f.SetColWidth(sheetName, "D", "D", 20); err != nil {
+		return nil, "", fmt.Errorf("failed to set column width: %w", err)
+	}
+	if err := f.SetColWidth(sheetName, "E", "E", 12); err != nil {
+		return nil, "", fmt.Errorf("failed to set column width: %w", err)
+	}
+	if err := f.SetColWidth(sheetName, "F", "F", 14); err != nil {
+		return nil, "", fmt.Errorf("failed to set column width: %w", err)
+	}
+
+	// Казахстанский часовой пояс (Asia/Qyzylorda = UTC+5)
+	kzLocation := time.FixedZone("Asia/Qyzylorda", 5*60*60)
+
+	// Стиль для итоговых строк
+	totalStyle, err := f.NewStyle(&excelize.Style{
+		Font: &excelize.Font{
+			Bold: true,
+		},
+		Fill: excelize.Fill{
+			Type:    "pattern",
+			Color:   []string{"#E8F4F8"},
+			Pattern: 1,
+		},
+	})
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to create total style: %w", err)
+	}
+
+	// Читаем данные порциями
+	pageSize := 2000
+	offset := 0
+	rowNum := 2 // Начинаем с 2-й строки (после заголовка)
+	var lastContractorName string
+	groupByContractor := filters.ContractorID == nil // Группируем только если contractor_id не указан
+
+	// Статистика для текущей группы
+	var currentGroupCount int64
+	var currentGroupVolume float64
+	var currentGroupStartRow int
+
+	// Общая статистика
+	var totalCount int64
+	var totalVolume float64
+
+	// Функция для вывода итогов группы
+	writeGroupTotal := func(contractorName string, count int64, volume float64, startRow int) error {
+		if count == 0 {
+			return nil
+		}
+		// Пустая строка перед итогами
+		cell, _ := excelize.CoordinatesToCellName(1, rowNum)
+		if err := sw.SetRow(cell, []interface{}{"", "", "", "", "", ""}); err != nil {
+			return fmt.Errorf("failed to set empty row: %w", err)
+		}
+		rowNum++
+
+		// Строка с итогами группы
+		totalText := fmt.Sprintf("Итого %s: %d рейсов, %.2f м³", contractorName, count, volume)
+		cell, _ = excelize.CoordinatesToCellName(1, rowNum)
+		if err := sw.SetRow(cell, []interface{}{totalText, "", "", "", "", ""}, excelize.RowOpts{StyleID: totalStyle}); err != nil {
+			return fmt.Errorf("failed to set group total row: %w", err)
+		}
+		// Объединяем ячейки для итогов (6 колонок)
+		mergeEnd, _ := excelize.CoordinatesToCellName(6, rowNum)
+		if err := f.MergeCell(sheetName, cell, mergeEnd); err != nil {
+			return fmt.Errorf("failed to merge cells: %w", err)
+		}
+		rowNum++
+		return nil
+	}
+
+	for {
+		events, err := s.repo.GetReportEventsForExcel(ctx, filters, pageSize, offset)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to get events: %w", err)
+		}
+
+		if len(events) == 0 {
+			break
+		}
+
+		for _, event := range events {
+			contractorName := "Не назначено"
+			if event.ContractorName != nil && *event.ContractorName != "" && *event.ContractorName != "Не назначено" {
+				contractorName = *event.ContractorName
+			}
+
+			// Если группируем по ТОО и contractor_name изменился
+			if groupByContractor && contractorName != lastContractorName {
+				// Выводим итоги предыдущей группы (если была)
+				if lastContractorName != "" && currentGroupCount > 0 {
+					if err := writeGroupTotal(lastContractorName, currentGroupCount, currentGroupVolume, currentGroupStartRow); err != nil {
+						return nil, "", err
+					}
+				}
+
+			// Пустая строка перед новой группой (если не первая)
+			if lastContractorName != "" {
+				cell, _ := excelize.CoordinatesToCellName(1, rowNum)
+				if err := sw.SetRow(cell, []interface{}{"", "", "", "", "", ""}); err != nil {
+					return nil, "", fmt.Errorf("failed to set empty row: %w", err)
+				}
+				rowNum++
+			}
+
+				// Заголовок новой группы
+				groupHeader := fmt.Sprintf("ТОО: %s", contractorName)
+				cell, _ := excelize.CoordinatesToCellName(1, rowNum)
+				if err := sw.SetRow(cell, []interface{}{groupHeader, "", "", "", "", ""}, excelize.RowOpts{StyleID: groupHeaderStyle}); err != nil {
+					return nil, "", fmt.Errorf("failed to set group header row: %w", err)
+				}
+				// Объединяем ячейки для заголовка группы (6 колонок)
+				mergeEnd, _ := excelize.CoordinatesToCellName(6, rowNum)
+				if err := f.MergeCell(sheetName, cell, mergeEnd); err != nil {
+					return nil, "", fmt.Errorf("failed to merge cells: %w", err)
+				}
+				rowNum++
+
+				// Сбрасываем статистику для новой группы
+				lastContractorName = contractorName
+				currentGroupCount = 0
+				currentGroupVolume = 0
+				currentGroupStartRow = rowNum
+			} else if !groupByContractor {
+				if lastContractorName == "" {
+					lastContractorName = contractorName
+					currentGroupStartRow = rowNum
+				}
+			}
+
+			// Форматируем данные
+			vehicleInfo := formatVehicleInfo(event.VehicleBrand, event.VehicleModel)
+			plateNumber := formatPlateNumber(event.NormalizedPlate, event.RawPlate)
+			eventTimeKZ := event.EventTime.In(kzLocation)
+			
+			// Форматируем процент и объем отдельно
+			percentageStr := formatPercentage(event.SnowVolumePercentage)
+			volumeStr := formatVolume(event.SnowVolumeM3)
+
+			// Записываем строку данных
+			cell, _ := excelize.CoordinatesToCellName(1, rowNum)
+			row := []interface{}{
+				contractorName,
+				vehicleInfo,
+				plateNumber,
+				eventTimeKZ, // Excel автоматически распознает time.Time как дату/время
+				percentageStr,
+				volumeStr,
+			}
+			if err := sw.SetRow(cell, row); err != nil {
+				return nil, "", fmt.Errorf("failed to set data row: %w", err)
+			}
+
+			// Обновляем статистику
+			currentGroupCount++
+			totalCount++
+			if event.SnowVolumeM3 != nil {
+				currentGroupVolume += *event.SnowVolumeM3
+				totalVolume += *event.SnowVolumeM3
+			}
+
+			rowNum++
+		}
+
+		// Если получили меньше pageSize, значит это последняя порция
+		if len(events) < pageSize {
+			break
+		}
+
+		offset += pageSize
+
+		// Проверяем контекст на отмену
+		select {
+		case <-ctx.Done():
+			return nil, "", ctx.Err()
+		default:
+		}
+	}
+
+	// Выводим итоги последней группы
+	if groupByContractor && lastContractorName != "" && currentGroupCount > 0 {
+		if err := writeGroupTotal(lastContractorName, currentGroupCount, currentGroupVolume, currentGroupStartRow); err != nil {
+			return nil, "", err
+		}
+	} else if !groupByContractor && currentGroupCount > 0 {
+		// Если не группируем, но есть данные - выводим общий итог
+		if err := writeGroupTotal("", currentGroupCount, currentGroupVolume, currentGroupStartRow); err != nil {
+			return nil, "", err
+		}
+	}
+
+	// Выводим общий итог в конце
+	if totalCount > 0 {
+		// Пустая строка перед общим итогом
+		cell, _ := excelize.CoordinatesToCellName(1, rowNum)
+		if err := sw.SetRow(cell, []interface{}{"", "", "", "", "", ""}); err != nil {
+			return nil, "", fmt.Errorf("failed to set empty row: %w", err)
+		}
+		rowNum++
+
+		// Общий итог
+		totalText := fmt.Sprintf("ВСЕГО: %d рейсов, %.2f м³", totalCount, totalVolume)
+		cell, _ = excelize.CoordinatesToCellName(1, rowNum)
+		if err := sw.SetRow(cell, []interface{}{totalText, "", "", "", "", ""}, excelize.RowOpts{StyleID: totalStyle}); err != nil {
+			return nil, "", fmt.Errorf("failed to set total row: %w", err)
+		}
+		// Объединяем ячейки для общего итога (6 колонок)
+		mergeEnd, _ := excelize.CoordinatesToCellName(6, rowNum)
+		if err := f.MergeCell(sheetName, cell, mergeEnd); err != nil {
+			return nil, "", fmt.Errorf("failed to merge cells: %w", err)
+		}
+		rowNum++
+	}
+
+	// Завершаем потоковую запись
+	if err := sw.Flush(); err != nil {
+		return nil, "", fmt.Errorf("failed to flush stream writer: %w", err)
+	}
+
+	// Применяем формат даты/времени к колонке D (после Flush можно использовать обычные методы)
+	// Находим последнюю строку с данными
+	lastRow := rowNum - 1
+	if lastRow > 1 {
+		// Применяем стиль ко всем ячейкам времени (колонка D, строки 2 до lastRow)
+		// Используем SetColStyle для применения стиля ко всей колонке (более эффективно)
+		colStart, _ := excelize.CoordinatesToCellName(4, 2)
+		colEnd, _ := excelize.CoordinatesToCellName(4, lastRow)
+		if err := f.SetCellStyle(sheetName, colStart, colEnd, dateTimeStyle); err != nil {
+			s.log.Warn().Err(err).Msg("failed to set datetime style for column D")
+		}
+	}
+
+	// Генерируем имя файла
+	filename := generateFilename(filters.From, filters.To)
+
+	// Сохраняем в буфер
+	var buf bytes.Buffer
+	if err := f.Write(&buf); err != nil {
+		return nil, "", fmt.Errorf("failed to write excel to buffer: %w", err)
+	}
+
+	return buf.Bytes(), filename, nil
+}
+
+// formatVehicleInfo форматирует информацию о машине (brand + model)
+func formatVehicleInfo(brand, model *string) string {
+	var parts []string
+	if brand != nil && strings.TrimSpace(*brand) != "" {
+		parts = append(parts, strings.TrimSpace(*brand))
+	}
+	if model != nil && strings.TrimSpace(*model) != "" {
+		parts = append(parts, strings.TrimSpace(*model))
+	}
+	result := strings.Join(parts, " ")
+	// Убираем двойные пробелы
+	result = strings.Join(strings.Fields(result), " ")
+	return result
+}
+
+// formatPlateNumber форматирует номер: использует normalized_plate, если пустой - raw_plate
+func formatPlateNumber(normalized, raw string) string {
+	if normalized != "" {
+		return normalized
+	}
+	return raw
+}
+
+// formatPercentage форматирует процент заполнения
+func formatPercentage(percentage *float64) string {
+	if percentage == nil || *percentage <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%.2f%%", *percentage)
+}
+
+// formatVolume форматирует объем в м³
+func formatVolume(volumeM3 *float64) string {
+	if volumeM3 == nil || *volumeM3 <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%.2f м³", *volumeM3)
+}
+
+// generateFilename генерирует имя файла для Excel выгрузки
+func generateFilename(from, to time.Time) string {
+	// Форматируем даты безопасно (без двоеточий)
+	fromStr := from.Format("2006-01-02")
+	toStr := to.Format("2006-01-02")
+	return fmt.Sprintf("anpr-events_%s_%s.xlsx", fromStr, toStr)
 }
