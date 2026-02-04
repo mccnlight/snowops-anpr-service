@@ -78,9 +78,12 @@ func applyDBTimeZoneToDSN(dsn, timeZone string) string {
 				return dsn
 			}
 		}
-		query.Set("TimeZone", tz)
-		u.RawQuery = query.Encode()
-		return u.String()
+
+		sep := "?"
+		if u.RawQuery != "" {
+			sep = "&"
+		}
+		return trimmedDSN + sep + "TimeZone=" + tz
 	}
 
 	for _, part := range strings.Fields(trimmedDSN) {
