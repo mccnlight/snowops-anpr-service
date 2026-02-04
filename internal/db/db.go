@@ -3,6 +3,8 @@ package db
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -15,6 +17,8 @@ import (
 
 func New(cfg *config.Config, log zerolog.Logger) (*gorm.DB, error) {
 	dbCfg := cfg.DB
+	dsn := applyDBTimeZoneToDSN(dbCfg.DSN, dbCfg.TimeZone)
+
 	gormLog := gormlogger.New(
 		zerologWriter{logger: log},
 		gormlogger.Config{
@@ -25,7 +29,7 @@ func New(cfg *config.Config, log zerolog.Logger) (*gorm.DB, error) {
 		},
 	)
 
-	database, err := gorm.Open(postgres.Open(dbCfg.DSN), &gorm.Config{
+	database, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
 		Logger: gormLog,
 	})
 	if err != nil {
@@ -54,6 +58,44 @@ func New(cfg *config.Config, log zerolog.Logger) (*gorm.DB, error) {
 	return database, nil
 }
 
+func applyDBTimeZoneToDSN(dsn, timeZone string) string {
+	tz := strings.TrimSpace(timeZone)
+	if tz == "" {
+		return dsn
+	}
+
+	trimmedDSN := strings.TrimSpace(dsn)
+	lowerDSN := strings.ToLower(trimmedDSN)
+	if strings.HasPrefix(lowerDSN, "postgres://") || strings.HasPrefix(lowerDSN, "postgresql://") {
+		u, err := url.Parse(trimmedDSN)
+		if err != nil {
+			return dsn
+		}
+
+		query := u.Query()
+		for key := range query {
+			if strings.EqualFold(key, "timezone") {
+				return dsn
+			}
+		}
+		query.Set("TimeZone", tz)
+		u.RawQuery = query.Encode()
+		return u.String()
+	}
+
+	for _, part := range strings.Fields(trimmedDSN) {
+		option := part
+		if idx := strings.Index(part, "="); idx >= 0 {
+			option = part[:idx]
+		}
+		if strings.EqualFold(option, "timezone") {
+			return dsn
+		}
+	}
+
+	return trimmedDSN + " TimeZone=" + tz
+}
+
 func HealthCheck(ctx context.Context, db *gorm.DB) error {
 	return db.WithContext(ctx).Exec("SELECT 1").Error
 }
@@ -72,4 +114,3 @@ type zerologWriter struct {
 func (w zerologWriter) Printf(msg string, args ...interface{}) {
 	w.logger.Info().Msgf(msg, args...)
 }
-
