@@ -1434,11 +1434,11 @@ func (h *Handler) exportReportsExcel(c *gin.Context) {
 		}
 	}
 
-	// Защита от больших выгрузок: максимум 30 дней
+	// Защита от больших выгрузок: максимум 90 дней
 	if !filters.From.IsZero() && !filters.To.IsZero() {
 		daysDiff := filters.To.Sub(filters.From).Hours() / 24
-		if daysDiff > 30 {
-			c.JSON(http.StatusBadRequest, errorResponse("date range cannot exceed 30 days"))
+		if daysDiff > 90 {
+			c.JSON(http.StatusBadRequest, errorResponse("date range cannot exceed 90 days"))
 			return
 		}
 	}
