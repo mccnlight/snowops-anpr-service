@@ -278,17 +278,10 @@ func (h *Handler) createANPREvent(c *gin.Context) {
 	photoFiles := form.File["photos"]
 	var photoURLs []string
 
-	// Normalize plate number for folder structure
-	normalizedPlate := utils.NormalizePlate(payload.Plate)
-	if normalizedPlate == "" {
-		// Fallback to event ID if plate is empty
-		normalizedPlate = eventID.String()
-	}
-
-	// Upload photos organized by date, time, event_id and plate
+	// Upload photos organized by date, camera_id and time
 	if h.r2Client != nil && len(photoFiles) > 0 {
 		for i, fileHeader := range photoFiles {
-			url, err := h.uploadEventPhoto(c.Request.Context(), fileHeader, eventID, payload.EventTime, normalizedPlate, i)
+			url, err := h.uploadEventPhoto(c.Request.Context(), fileHeader, eventID, payload.EventTime, payload.CameraID, i)
 			if err != nil {
 				h.log.Warn().
 					Err(err).
@@ -373,7 +366,7 @@ func (h *Handler) uploadEventPhoto(
 	fileHeader *multipart.FileHeader,
 	eventID uuid.UUID,
 	eventTime time.Time,
-	normalizedPlate string,
+	cameraID string,
 	index int,
 ) (string, error) {
 	const maxPhotoSize = 10 << 20 // 10MB
@@ -439,13 +432,15 @@ func (h *Handler) uploadEventPhoto(
 	kzLocation := time.FixedZone("KZ", 5*60*60) // UTC+5
 	eventTimeKZ := eventTime.In(kzLocation)
 
-	// Format date and time for folder structure: YYYY-MM-DD/HH-MM-SS-{event_id}-{normalized_plate}
+	// Format date and time for folder structure.
 	dateStr := eventTimeKZ.Format("2006-01-02")
 	timeStr := eventTimeKZ.Format("15-04-05")
+	cameraPath := sanitizePathSegment(cameraID, "unknown_camera")
 
-	// Organize photos by date, time, event_id and plate: anpr-events/{YYYY-MM-DD}/{HH-MM-SS}-{event_id}-{normalized_plate}/photo-{index}{ext}
-	key := fmt.Sprintf("anpr-events/%s/%s-%s-%s/photo-%d%s",
-		dateStr, timeStr, eventID.String(), normalizedPlate, index, ext)
+	// Organize photos by date, camera and time:
+	// anpr_events/{YYYY-MM-DD}/{camera_id}/{HH-MM-SS}/{event_id}-photo-{index}{ext}
+	key := fmt.Sprintf("anpr_events/%s/%s/%s/%s-photo-%d%s",
+		dateStr, cameraPath, timeStr, eventID.String(), index, ext)
 
 	// Upload to R2
 	url, err := h.r2Client.Upload(ctx, key, file, fileHeader.Size, contentType)
@@ -454,6 +449,36 @@ func (h *Handler) uploadEventPhoto(
 	}
 
 	return url, nil
+}
+
+func sanitizePathSegment(value, fallback string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "" {
+		return fallback
+	}
+
+	var b strings.Builder
+	b.Grow(len(normalized))
+	prevUnderscore := false
+	for _, r := range normalized {
+		isAllowed := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_'
+		if isAllowed {
+			b.WriteRune(r)
+			prevUnderscore = false
+			continue
+		}
+		if !prevUnderscore {
+			b.WriteByte('_')
+			prevUnderscore = true
+		}
+	}
+
+	sanitized := strings.Trim(b.String(), "_")
+	if sanitized == "" {
+		return fallback
+	}
+
+	return sanitized
 }
 
 func (h *Handler) listPlates(c *gin.Context) {

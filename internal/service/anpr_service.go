@@ -238,8 +238,16 @@ func (s *ANPRService) ProcessIncomingEvent(ctx context.Context, payload anpr.Eve
 		contractorID = vehicleData.ContractorID
 	}
 
+	polygonID, err := s.repo.ResolvePolygonIDByCameraID(ctx, payload.CameraID)
+	if err != nil {
+		s.log.Warn().
+			Err(err).
+			Str("camera_id", payload.CameraID).
+			Msg("failed to resolve polygon_id by camera_id")
+	}
+
 	// Сохраняем событие с данными из vehicles (если vehicle найден)
-	if err := s.repo.CreateANPREvent(ctx, event, contractorID); err != nil {
+	if err := s.repo.CreateANPREvent(ctx, event, contractorID, polygonID); err != nil {
 		s.log.Error().
 			Err(err).
 			Str("plate", normalized).

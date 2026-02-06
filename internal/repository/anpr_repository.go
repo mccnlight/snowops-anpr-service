@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,6 +16,14 @@ import (
 
 type ANPRRepository struct {
 	db *gorm.DB
+}
+
+var cameraAliasToPolygonName = map[string]string{
+	"shahovskoye": "Шаховское",
+	"solnechniy":  "Солнечный",
+	"solnechny":   "Солнечный",
+	"solnechnyy":  "Солнечный",
+	"yakor":       "Якорь",
 }
 
 func NewANPRRepository(db *gorm.DB) *ANPRRepository {
@@ -148,11 +157,17 @@ func (r *ANPRRepository) GetOrCreatePlate(ctx context.Context, normalized, origi
 	return plate.ID, nil
 }
 
-func (r *ANPRRepository) CreateANPREvent(ctx context.Context, event *anpr.Event, contractorID *uuid.UUID) error {
+func (r *ANPRRepository) CreateANPREvent(
+	ctx context.Context,
+	event *anpr.Event,
+	contractorID *uuid.UUID,
+	polygonID *uuid.UUID,
+) error {
 	dbEvent := ANPREvent{
 		ID:              event.ID, // Use pre-generated ID
 		PlateID:         &event.PlateID,
 		CameraID:        event.CameraID,
+		PolygonID:       polygonID,
 		RawPlate:        event.Plate,
 		NormalizedPlate: event.NormalizedPlate,
 		EventTime:       event.EventTime,
@@ -222,6 +237,39 @@ func (r *ANPRRepository) CreateANPREvent(ctx context.Context, event *anpr.Event,
 
 	event.ID = dbEvent.ID
 	return nil
+}
+
+func (r *ANPRRepository) ResolvePolygonIDByCameraID(ctx context.Context, cameraID string) (*uuid.UUID, error) {
+	alias := strings.ToLower(strings.TrimSpace(cameraID))
+	if alias == "" {
+		return nil, nil
+	}
+
+	polygonName, ok := cameraAliasToPolygonName[alias]
+	if !ok {
+		return nil, nil
+	}
+
+	var polygon struct {
+		ID uuid.UUID `gorm:"column:id"`
+	}
+
+	err := r.db.WithContext(ctx).
+		Table("polygons").
+		Select("id").
+		Where("LOWER(name) = LOWER(?)", polygonName).
+		Limit(1).
+		First(&polygon).Error
+
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("resolve polygon for camera_id %q: %w", cameraID, err)
+	}
+
+	polygonID := polygon.ID
+	return &polygonID, nil
 }
 
 func (r *ANPRRepository) FindListsForPlate(ctx context.Context, plateID uuid.UUID) ([]anpr.ListHit, error) {

@@ -14,6 +14,7 @@ type HTTPConfig struct {
 
 type DBConfig struct {
 	DSN             string
+	TimeZone        string
 	MaxOpenConns    int
 	MaxIdleConns    int
 	ConnMaxLifetime time.Duration
@@ -61,6 +62,7 @@ func Load() (*Config, error) {
 		},
 		DB: DBConfig{
 			DSN:             v.GetString("DB_DSN"),
+			TimeZone:        v.GetString("DB_TIMEZONE"),
 			MaxOpenConns:    v.GetInt("DB_MAX_OPEN_CONNS"),
 			MaxIdleConns:    v.GetInt("DB_MAX_IDLE_CONNS"),
 			ConnMaxLifetime: v.GetDuration("DB_CONN_MAX_LIFETIME"),
@@ -86,6 +88,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.Environment == "" {
 		cfg.Environment = "development"
+	}
+	if cfg.DB.TimeZone == "" {
+		cfg.DB.TimeZone = "Asia/Almaty"
 	}
 	if cfg.Camera.Model == "" {
 		cfg.Camera.Model = "DS-TCG406-E"
