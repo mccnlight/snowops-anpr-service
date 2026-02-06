@@ -394,6 +394,20 @@ func (s *ANPRService) FindEvents(ctx context.Context, plateQuery *string, from, 
 			id := e.PolygonID.String()
 			polygonID = &id
 		}
+		
+		// Загружаем фотографии для каждого события
+		photos, err := s.repo.GetEventPhotos(ctx, e.ID)
+		if err != nil {
+			s.log.Warn().Err(err).Str("event_id", e.ID.String()).Msg("failed to get event photos")
+			photos = []repository.EventPhoto{}
+		}
+		
+		// Преобразуем фото в массив URL
+		photoURLs := make([]string, 0, len(photos))
+		for _, photo := range photos {
+			photoURLs = append(photoURLs, photo.PhotoURL)
+		}
+		
 		info := EventInfo{
 			ID:                e.ID.String(),
 			PlateID:           plateID,
@@ -415,6 +429,7 @@ func (s *ANPRService) FindEvents(ctx context.Context, plateQuery *string, from, 
 			EventTime:         e.EventTime,
 			SnowVolumeM3:      e.SnowVolumeM3,
 			PolygonID:         polygonID,
+			Photos:            photoURLs, // Добавляем фотографии
 		}
 		result = append(result, info)
 	}
@@ -452,6 +467,19 @@ func (s *ANPRService) GetEventsByPlateAndTime(ctx context.Context, normalizedPla
 			id := e.PolygonID.String()
 			polygonID = &id
 		}
+		
+		// Загружаем фотографии для каждого события
+		photos, err := s.repo.GetEventPhotos(ctx, e.ID)
+		if err != nil {
+			s.log.Warn().Err(err).Str("event_id", e.ID.String()).Msg("failed to get event photos")
+			photos = []repository.EventPhoto{}
+		}
+		
+		// Преобразуем фото в массив URL
+		photoURLs := make([]string, 0, len(photos))
+		for _, photo := range photos {
+			photoURLs = append(photoURLs, photo.PhotoURL)
+		}
 
 		info := EventInfo{
 			ID:                e.ID.String(),
@@ -474,6 +502,7 @@ func (s *ANPRService) GetEventsByPlateAndTime(ctx context.Context, normalizedPla
 			EventTime:         e.EventTime,
 			SnowVolumeM3:      e.SnowVolumeM3,
 			PolygonID:         polygonID,
+			Photos:            photoURLs, // Добавляем фотографии
 		}
 		result = append(result, info)
 	}
