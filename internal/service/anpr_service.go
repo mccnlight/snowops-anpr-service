@@ -394,20 +394,20 @@ func (s *ANPRService) FindEvents(ctx context.Context, plateQuery *string, from, 
 			id := e.PolygonID.String()
 			polygonID = &id
 		}
-		
+
 		// Загружаем фотографии для каждого события
 		photos, err := s.repo.GetEventPhotos(ctx, e.ID)
 		if err != nil {
 			s.log.Warn().Err(err).Str("event_id", e.ID.String()).Msg("failed to get event photos")
 			photos = []repository.EventPhoto{}
 		}
-		
+
 		// Преобразуем фото в массив URL
 		photoURLs := make([]string, 0, len(photos))
 		for _, photo := range photos {
 			photoURLs = append(photoURLs, photo.PhotoURL)
 		}
-		
+
 		info := EventInfo{
 			ID:                e.ID.String(),
 			PlateID:           plateID,
@@ -467,14 +467,14 @@ func (s *ANPRService) GetEventsByPlateAndTime(ctx context.Context, normalizedPla
 			id := e.PolygonID.String()
 			polygonID = &id
 		}
-		
+
 		// Загружаем фотографии для каждого события
 		photos, err := s.repo.GetEventPhotos(ctx, e.ID)
 		if err != nil {
 			s.log.Warn().Err(err).Str("event_id", e.ID.String()).Msg("failed to get event photos")
 			photos = []repository.EventPhoto{}
 		}
-		
+
 		// Преобразуем фото в массив URL
 		photoURLs := make([]string, 0, len(photos))
 		for _, photo := range photos {
@@ -809,6 +809,19 @@ type ReportResult struct {
 	Events      []ReportEventInfo `json:"events"`
 }
 
+// WeekdayStatsResult содержит агрегированную статистику по дням недели.
+// Всегда возвращает 7 элементов (Пн..Вс), даже если по дню нет данных.
+type WeekdayStatsResult struct {
+	Items []WeekdayStatItem `json:"items"`
+}
+
+type WeekdayStatItem struct {
+	ISOWeekday  int     `json:"iso_weekday"`
+	Weekday     string  `json:"weekday"`
+	TotalVolume float64 `json:"total_volume"`
+	TripCount   int64   `json:"trip_count"`
+}
+
 // ReportEventInfo содержит информацию о событии для отчета
 type ReportEventInfo struct {
 	ID                string    `json:"id"`
@@ -837,6 +850,38 @@ type ReportEventInfo struct {
 	PlatePhotoURL     *string   `json:"plate_photo_url,omitempty"`
 	BodyPhotoURL      *string   `json:"body_photo_url,omitempty"`
 	VehicleID         *string   `json:"vehicle_id,omitempty"`
+}
+
+// GetReportWeekdayStats возвращает статистику по дням недели для графика на дашборде.
+// Агрегирует данные по всем неделям выбранного периода.
+func (s *ANPRService) GetReportWeekdayStats(ctx context.Context, filters repository.ReportFilters) (*WeekdayStatsResult, error) {
+	rows, err := s.repo.GetReportWeekdayStats(ctx, filters)
+	if err != nil {
+		s.log.Error().Err(err).Msg("failed to get weekday report stats")
+		return nil, fmt.Errorf("failed to get weekday report stats: %w", err)
+	}
+
+	// Заполняем все дни недели значениями по умолчанию.
+	items := []WeekdayStatItem{
+		{ISOWeekday: 1, Weekday: "MON", TotalVolume: 0, TripCount: 0},
+		{ISOWeekday: 2, Weekday: "TUE", TotalVolume: 0, TripCount: 0},
+		{ISOWeekday: 3, Weekday: "WED", TotalVolume: 0, TripCount: 0},
+		{ISOWeekday: 4, Weekday: "THU", TotalVolume: 0, TripCount: 0},
+		{ISOWeekday: 5, Weekday: "FRI", TotalVolume: 0, TripCount: 0},
+		{ISOWeekday: 6, Weekday: "SAT", TotalVolume: 0, TripCount: 0},
+		{ISOWeekday: 7, Weekday: "SUN", TotalVolume: 0, TripCount: 0},
+	}
+
+	for _, row := range rows {
+		if row.ISOWeekday < 1 || row.ISOWeekday > 7 {
+			continue
+		}
+		idx := row.ISOWeekday - 1
+		items[idx].TotalVolume = row.TotalVolume
+		items[idx].TripCount = row.TripCount
+	}
+
+	return &WeekdayStatsResult{Items: items}, nil
 }
 
 // ExportReportsExcel экспортирует отчеты в Excel файл
@@ -1041,14 +1086,14 @@ func (s *ANPRService) generateExcelReport(ctx context.Context, filters repositor
 					}
 				}
 
-			// Пустая строка перед новой группой (если не первая)
-			if lastContractorName != "" {
-				cell, _ := excelize.CoordinatesToCellName(1, rowNum)
-				if err := sw.SetRow(cell, []interface{}{"", "", "", "", "", ""}); err != nil {
-					return nil, "", fmt.Errorf("failed to set empty row: %w", err)
+				// Пустая строка перед новой группой (если не первая)
+				if lastContractorName != "" {
+					cell, _ := excelize.CoordinatesToCellName(1, rowNum)
+					if err := sw.SetRow(cell, []interface{}{"", "", "", "", "", ""}); err != nil {
+						return nil, "", fmt.Errorf("failed to set empty row: %w", err)
+					}
+					rowNum++
 				}
-				rowNum++
-			}
 
 				// Заголовок новой группы
 				groupHeader := fmt.Sprintf("ТОО: %s", contractorName)
@@ -1079,7 +1124,7 @@ func (s *ANPRService) generateExcelReport(ctx context.Context, filters repositor
 			vehicleInfo := formatVehicleInfo(event.VehicleBrand, event.VehicleModel)
 			plateNumber := formatPlateNumber(event.NormalizedPlate, event.RawPlate)
 			eventTimeKZ := event.EventTime.In(kzLocation)
-			
+
 			// Форматируем процент и объем отдельно
 			percentageStr := formatPercentage(event.SnowVolumePercentage)
 			volumeStr := formatVolume(event.SnowVolumeM3)

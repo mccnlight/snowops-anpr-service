@@ -572,13 +572,13 @@ func (r *ANPRRepository) GetEventPhotos(ctx context.Context, eventID uuid.UUID) 
 // ReportEvent представляет событие для отчетов с данными о транспорте и подрядчике
 type ReportEvent struct {
 	ANPREvent
-	VehicleID       *uuid.UUID `gorm:"column:vehicle_id"`
-	ContractorID    *uuid.UUID `gorm:"column:contractor_id"`
+	VehicleID      *uuid.UUID `gorm:"column:vehicle_id"`
+	ContractorID   *uuid.UUID `gorm:"column:contractor_id"`
 	ContractorName *string    `gorm:"column:contractor_name"`
-	VehicleBrand    *string
-	VehicleModel    *string
-	PlatePhotoURL   *string `gorm:"column:plate_photo_url"`
-	BodyPhotoURL    *string `gorm:"column:body_photo_url"`
+	VehicleBrand   *string
+	VehicleModel   *string
+	PlatePhotoURL  *string `gorm:"column:plate_photo_url"`
+	BodyPhotoURL   *string `gorm:"column:body_photo_url"`
 }
 
 // GetReportEvents получает события для отчетов с фильтрацией
@@ -691,22 +691,76 @@ func (r *ANPRRepository) GetReportStats(ctx context.Context, filters ReportFilte
 
 // ReportFilters содержит фильтры для отчетов
 type ReportFilters struct {
-	ContractorID  *uuid.UUID
-	PolygonID     *uuid.UUID
-	VehicleID     *uuid.UUID
-	PlateNumber   *string
-	From          time.Time
-	To            time.Time
-	OnlyAssigned  bool // Только привязанные события (для подрядчиков)
-	Limit         int
-	Offset        int
-	MaxRows       int // Максимальное количество строк для экспорта
+	ContractorID *uuid.UUID
+	PolygonID    *uuid.UUID
+	VehicleID    *uuid.UUID
+	PlateNumber  *string
+	From         time.Time
+	To           time.Time
+	OnlyAssigned bool // Только привязанные события (для подрядчиков)
+	Limit        int
+	Offset       int
+	MaxRows      int // Максимальное количество строк для экспорта
 }
 
 // ReportStats содержит статистику для отчетов
 type ReportStats struct {
 	TotalVolume float64 `gorm:"column:total_volume"`
 	TripCount   int64   `gorm:"column:trip_count"`
+}
+
+// WeekdayReportStats содержит агрегированные показатели по дням недели (ISO: 1=Пн ... 7=Вс)
+type WeekdayReportStats struct {
+	ISOWeekday  int     `gorm:"column:iso_weekday"`
+	TotalVolume float64 `gorm:"column:total_volume"`
+	TripCount   int64   `gorm:"column:trip_count"`
+}
+
+// GetReportWeekdayStats получает агрегированную статистику по дням недели.
+// Данные агрегируются по всем неделям выбранного периода.
+func (r *ANPRRepository) GetReportWeekdayStats(ctx context.Context, filters ReportFilters) ([]WeekdayReportStats, error) {
+	query := r.db.WithContext(ctx).
+		Table("anpr_events AS e").
+		Select(`
+			EXTRACT(
+				ISODOW
+				FROM ((e.event_time AT TIME ZONE 'Asia/Qyzylorda') - INTERVAL '16 hours')
+			)::int AS iso_weekday,
+			COALESCE(SUM(e.snow_volume_m3), 0) AS total_volume,
+			COUNT(*) AS trip_count
+		`).
+		Joins("LEFT JOIN vehicles v ON normalize_plate_number(v.plate_number) = e.normalized_plate AND v.is_active = true").
+		Where("e.snow_volume_m3 IS NOT NULL AND e.snow_volume_m3 > 0").
+		Where("((e.event_time AT TIME ZONE 'Asia/Qyzylorda')::time >= TIME '16:00:00' OR (e.event_time AT TIME ZONE 'Asia/Qyzylorda')::time < TIME '10:00:00')")
+
+	if filters.ContractorID != nil {
+		query = query.Where("(e.contractor_id = ? OR v.contractor_id = ?)", *filters.ContractorID, *filters.ContractorID)
+	}
+	if filters.PolygonID != nil {
+		query = query.Where("e.polygon_id = ?", *filters.PolygonID)
+	}
+	if !filters.From.IsZero() {
+		query = query.Where("e.event_time >= ?", filters.From)
+	}
+	if !filters.To.IsZero() {
+		query = query.Where("e.event_time <= ?", filters.To)
+	}
+	if filters.PlateNumber != nil && *filters.PlateNumber != "" {
+		normalized := fmt.Sprintf("%%%s%%", *filters.PlateNumber)
+		query = query.Where("e.normalized_plate LIKE ? OR e.raw_plate LIKE ?", normalized, normalized)
+	}
+	if filters.VehicleID != nil {
+		query = query.Where("v.id = ?", *filters.VehicleID)
+	}
+	if filters.OnlyAssigned {
+		query = query.Where("(e.contractor_id IS NOT NULL OR v.contractor_id IS NOT NULL)")
+	}
+
+	query = query.Group("iso_weekday").Order("iso_weekday ASC")
+
+	var rows []WeekdayReportStats
+	err := query.Scan(&rows).Error
+	return rows, err
 }
 
 // GetReportEventsForExcel получает события для Excel выгрузки порциями с правильной сортировкой

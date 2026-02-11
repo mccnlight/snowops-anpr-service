@@ -69,6 +69,7 @@ func (h *Handler) Register(r *gin.Engine, authMiddleware gin.HandlerFunc) {
 		protected.DELETE("/anpr/events/old", h.deleteOldEvents)
 		protected.DELETE("/anpr/events/all", h.deleteAllEvents)
 		protected.GET("/reports", h.getReports)
+		protected.GET("/reports/weekday-stats", h.getReportsWeekdayStats)
 		protected.GET("/reports/excel", h.exportReportsExcel)
 	}
 
@@ -1362,6 +1363,130 @@ func (h *Handler) getReports(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, successResponse(result))
+}
+
+func (h *Handler) getReportsWeekdayStats(c *gin.Context) {
+	principal, ok := middleware.MustPrincipal(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, errorResponse("unauthorized"))
+		return
+	}
+
+	filters := repository.ReportFilters{}
+
+	if contractorIDStr := strings.TrimSpace(c.Query("contractor_id")); contractorIDStr != "" {
+		contractorID, err := uuid.Parse(contractorIDStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, errorResponse("invalid contractor_id"))
+			return
+		}
+		filters.ContractorID = &contractorID
+	}
+
+	if polygonIDStr := strings.TrimSpace(c.Query("polygon_id")); polygonIDStr != "" {
+		polygonID, err := uuid.Parse(polygonIDStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, errorResponse("invalid polygon_id"))
+			return
+		}
+		filters.PolygonID = &polygonID
+	}
+
+	if vehicleIDStr := strings.TrimSpace(c.Query("vehicle_id")); vehicleIDStr != "" {
+		vehicleID, err := uuid.Parse(vehicleIDStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, errorResponse("invalid vehicle_id"))
+			return
+		}
+		filters.VehicleID = &vehicleID
+	}
+
+	if plateNumber := strings.TrimSpace(c.Query("plate")); plateNumber != "" {
+		filters.PlateNumber = &plateNumber
+	}
+
+	fromStr := strings.TrimSpace(c.Query("from"))
+	toStr := strings.TrimSpace(c.Query("to"))
+
+	// По умолчанию (без from/to) строим full-week по серверному времени:
+	// от понедельника 00:00 до воскресенья 23:59:59.999... (Asia/Qyzylorda).
+	if fromStr == "" && toStr == "" {
+		fromTime, toTime := getCurrentFullWeekRangeUTC(time.Now())
+		filters.From = fromTime
+		filters.To = toTime
+	} else {
+		// Для кастомного диапазона требуем обе границы.
+		if fromStr == "" || toStr == "" {
+			c.JSON(http.StatusBadRequest, errorResponse("both from and to are required for custom range"))
+			return
+		}
+
+		fromTime, err := time.Parse(time.RFC3339, fromStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, errorResponse("invalid from time format, use RFC3339"))
+			return
+		}
+		toTime, err := time.Parse(time.RFC3339, toStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, errorResponse("invalid to time format, use RFC3339"))
+			return
+		}
+		if toTime.Before(fromTime) {
+			c.JSON(http.StatusBadRequest, errorResponse("to time must be after from time"))
+			return
+		}
+
+		filters.From = fromTime
+		filters.To = toTime
+	}
+
+	if principal.IsContractor() {
+		filters.ContractorID = &principal.OrgID
+		filters.OnlyAssigned = true
+	} else {
+		filters.OnlyAssigned = false
+	}
+
+	result, err := h.anprService.GetReportWeekdayStats(c.Request.Context(), filters)
+	if err != nil {
+		if errors.Is(err, service.ErrInvalidInput) {
+			h.log.Warn().Err(err).Msg("invalid input for weekday stats query")
+			c.JSON(http.StatusBadRequest, errorResponse(err.Error()))
+			return
+		}
+		h.log.Error().Err(err).Msg("failed to get weekday stats")
+		c.JSON(http.StatusInternalServerError, errorResponse("internal error"))
+		return
+	}
+
+	c.JSON(http.StatusOK, successResponse(gin.H{
+		"from":  filters.From,
+		"to":    filters.To,
+		"items": result.Items,
+	}))
+}
+
+func getCurrentFullWeekRangeUTC(now time.Time) (time.Time, time.Time) {
+	kzLocation := time.FixedZone("Asia/Qyzylorda", 5*60*60)
+	nowKZ := now.In(kzLocation)
+
+	weekday := int(nowKZ.Weekday()) // Sunday=0
+	if weekday == 0 {
+		weekday = 7
+	}
+
+	startKZ := time.Date(
+		nowKZ.Year(),
+		nowKZ.Month(),
+		nowKZ.Day()-(weekday-1),
+		16, 0, 0, 0,
+		kzLocation,
+	)
+	// Операционный день: 16:00 -> 10:00 следующего дня.
+	// Полная неделя (Пн..Вс) заканчивается в следующий понедельник в 09:59:59.999...
+	endKZ := startKZ.AddDate(0, 0, 7).Add(-6 * time.Hour).Add(-time.Nanosecond)
+
+	return startKZ.UTC(), endKZ.UTC()
 }
 
 func (h *Handler) exportReportsExcel(c *gin.Context) {
