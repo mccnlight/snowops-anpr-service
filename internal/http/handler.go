@@ -69,6 +69,7 @@ func (h *Handler) Register(r *gin.Engine, authMiddleware gin.HandlerFunc) {
 		protected.DELETE("/anpr/events/old", h.deleteOldEvents)
 		protected.DELETE("/anpr/events/all", h.deleteAllEvents)
 		protected.GET("/reports", h.getReports)
+		protected.GET("/reports/comparison", h.getReportsComparison)
 		protected.GET("/reports/excel", h.exportReportsExcel)
 	}
 
@@ -1357,6 +1358,131 @@ func (h *Handler) getReports(c *gin.Context) {
 			return
 		}
 		h.log.Error().Err(err).Msg("failed to get reports")
+		c.JSON(http.StatusInternalServerError, errorResponse("internal error"))
+		return
+	}
+
+	c.JSON(http.StatusOK, successResponse(result))
+}
+
+func (h *Handler) getReportsComparison(c *gin.Context) {
+	principal, ok := middleware.MustPrincipal(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, errorResponse("unauthorized"))
+		return
+	}
+
+	modeRaw := strings.ToLower(strings.TrimSpace(c.Query("mode")))
+	if modeRaw == "" {
+		c.JSON(http.StatusBadRequest, errorResponse("mode is required (day/week/month)"))
+		return
+	}
+
+	var mode service.ComparisonMode
+	switch modeRaw {
+	case string(service.ComparisonModeDay):
+		mode = service.ComparisonModeDay
+	case string(service.ComparisonModeWeek):
+		mode = service.ComparisonModeWeek
+	case string(service.ComparisonModeMonth):
+		mode = service.ComparisonModeMonth
+	default:
+		c.JSON(http.StatusBadRequest, errorResponse("invalid mode (use day/week/month)"))
+		return
+	}
+
+	fromRaw := strings.TrimSpace(c.Query("from"))
+	toRaw := strings.TrimSpace(c.Query("to"))
+	if fromRaw == "" || toRaw == "" {
+		c.JSON(http.StatusBadRequest, errorResponse("from and to are required (RFC3339)"))
+		return
+	}
+
+	currentFrom, err := time.Parse(time.RFC3339, fromRaw)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, errorResponse("invalid from time format, use RFC3339"))
+		return
+	}
+	currentTo, err := time.Parse(time.RFC3339, toRaw)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, errorResponse("invalid to time format, use RFC3339"))
+		return
+	}
+
+	var previousFrom *time.Time
+	var previousTo *time.Time
+	previousFromRaw := strings.TrimSpace(c.Query("previous_from"))
+	previousToRaw := strings.TrimSpace(c.Query("previous_to"))
+	if previousFromRaw != "" || previousToRaw != "" {
+		if previousFromRaw == "" || previousToRaw == "" {
+			c.JSON(http.StatusBadRequest, errorResponse("both previous_from and previous_to are required when custom previous period is used"))
+			return
+		}
+		parsedFrom, err := time.Parse(time.RFC3339, previousFromRaw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, errorResponse("invalid previous_from time format, use RFC3339"))
+			return
+		}
+		parsedTo, err := time.Parse(time.RFC3339, previousToRaw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, errorResponse("invalid previous_to time format, use RFC3339"))
+			return
+		}
+		previousFrom = &parsedFrom
+		previousTo = &parsedTo
+	}
+
+	baseFilters := repository.ReportFilters{}
+
+	if contractorIDStr := strings.TrimSpace(c.Query("contractor_id")); contractorIDStr != "" {
+		contractorID, err := uuid.Parse(contractorIDStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, errorResponse("invalid contractor_id"))
+			return
+		}
+		baseFilters.ContractorID = &contractorID
+	}
+	if polygonIDStr := strings.TrimSpace(c.Query("polygon_id")); polygonIDStr != "" {
+		polygonID, err := uuid.Parse(polygonIDStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, errorResponse("invalid polygon_id"))
+			return
+		}
+		baseFilters.PolygonID = &polygonID
+	}
+	if vehicleIDStr := strings.TrimSpace(c.Query("vehicle_id")); vehicleIDStr != "" {
+		vehicleID, err := uuid.Parse(vehicleIDStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, errorResponse("invalid vehicle_id"))
+			return
+		}
+		baseFilters.VehicleID = &vehicleID
+	}
+	if plateNumber := strings.TrimSpace(c.Query("plate")); plateNumber != "" {
+		baseFilters.PlateNumber = &plateNumber
+	}
+
+	if principal.IsContractor() {
+		baseFilters.ContractorID = &principal.OrgID
+		baseFilters.OnlyAssigned = true
+	} else {
+		baseFilters.OnlyAssigned = false
+	}
+
+	result, err := h.anprService.GetReportsComparison(c.Request.Context(), service.ReportComparisonInput{
+		Mode:         mode,
+		CurrentFrom:  currentFrom,
+		CurrentTo:    currentTo,
+		PreviousFrom: previousFrom,
+		PreviousTo:   previousTo,
+		BaseFilters:  baseFilters,
+	})
+	if err != nil {
+		if errors.Is(err, service.ErrInvalidInput) {
+			c.JSON(http.StatusBadRequest, errorResponse(err.Error()))
+			return
+		}
+		h.log.Error().Err(err).Msg("failed to get reports comparison")
 		c.JSON(http.StatusInternalServerError, errorResponse("internal error"))
 		return
 	}

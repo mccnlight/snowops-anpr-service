@@ -394,20 +394,20 @@ func (s *ANPRService) FindEvents(ctx context.Context, plateQuery *string, from, 
 			id := e.PolygonID.String()
 			polygonID = &id
 		}
-		
+
 		// Загружаем фотографии для каждого события
 		photos, err := s.repo.GetEventPhotos(ctx, e.ID)
 		if err != nil {
 			s.log.Warn().Err(err).Str("event_id", e.ID.String()).Msg("failed to get event photos")
 			photos = []repository.EventPhoto{}
 		}
-		
+
 		// Преобразуем фото в массив URL
 		photoURLs := make([]string, 0, len(photos))
 		for _, photo := range photos {
 			photoURLs = append(photoURLs, photo.PhotoURL)
 		}
-		
+
 		info := EventInfo{
 			ID:                e.ID.String(),
 			PlateID:           plateID,
@@ -467,14 +467,14 @@ func (s *ANPRService) GetEventsByPlateAndTime(ctx context.Context, normalizedPla
 			id := e.PolygonID.String()
 			polygonID = &id
 		}
-		
+
 		// Загружаем фотографии для каждого события
 		photos, err := s.repo.GetEventPhotos(ctx, e.ID)
 		if err != nil {
 			s.log.Warn().Err(err).Str("event_id", e.ID.String()).Msg("failed to get event photos")
 			photos = []repository.EventPhoto{}
 		}
-		
+
 		// Преобразуем фото в массив URL
 		photoURLs := make([]string, 0, len(photos))
 		for _, photo := range photos {
@@ -809,6 +809,50 @@ type ReportResult struct {
 	Events      []ReportEventInfo `json:"events"`
 }
 
+type ComparisonMode string
+
+const (
+	ComparisonModeDay   ComparisonMode = "day"
+	ComparisonModeWeek  ComparisonMode = "week"
+	ComparisonModeMonth ComparisonMode = "month"
+)
+
+type ReportComparisonInput struct {
+	Mode         ComparisonMode
+	CurrentFrom  time.Time
+	CurrentTo    time.Time
+	PreviousFrom *time.Time
+	PreviousTo   *time.Time
+	BaseFilters  repository.ReportFilters
+}
+
+type ReportComparisonResult struct {
+	Mode      ComparisonMode       `json:"mode"`
+	Current   ComparisonPeriodData `json:"current"`
+	Previous  ComparisonPeriodData `json:"previous"`
+	Deviation ComparisonDeviation  `json:"deviation"`
+}
+
+type ComparisonPeriodData struct {
+	From            time.Time `json:"from"`
+	To              time.Time `json:"to"`
+	TotalVolume     float64   `json:"total_volume"`
+	TripCount       int64     `json:"trip_count"`
+	AvgVolumePerDay float64   `json:"avg_volume_per_day,omitempty"`
+	AvgTripsPerDay  float64   `json:"avg_trips_per_day,omitempty"`
+}
+
+type ComparisonDeviation struct {
+	VolumePercent    float64 `json:"volume_percent"`
+	TripPercent      float64 `json:"trip_percent"`
+	AvgVolumePercent float64 `json:"avg_volume_percent,omitempty"`
+	AvgTripsPercent  float64 `json:"avg_trips_percent,omitempty"`
+	VolumeColor      string  `json:"volume_color"` // green | red | gray
+	TripColor        string  `json:"trip_color"`   // green | red | gray
+	AvgVolumeColor   string  `json:"avg_volume_color,omitempty"`
+	AvgTripsColor    string  `json:"avg_trips_color,omitempty"`
+}
+
 // ReportEventInfo содержит информацию о событии для отчета
 type ReportEventInfo struct {
 	ID                string    `json:"id"`
@@ -837,6 +881,127 @@ type ReportEventInfo struct {
 	PlatePhotoURL     *string   `json:"plate_photo_url,omitempty"`
 	BodyPhotoURL      *string   `json:"body_photo_url,omitempty"`
 	VehicleID         *string   `json:"vehicle_id,omitempty"`
+}
+
+func (s *ANPRService) GetReportsComparison(ctx context.Context, input ReportComparisonInput) (*ReportComparisonResult, error) {
+	if input.CurrentFrom.IsZero() || input.CurrentTo.IsZero() || input.CurrentTo.Before(input.CurrentFrom) {
+		return nil, fmt.Errorf("%w: invalid current period", ErrInvalidInput)
+	}
+	if input.Mode != ComparisonModeDay && input.Mode != ComparisonModeWeek && input.Mode != ComparisonModeMonth {
+		return nil, fmt.Errorf("%w: mode must be one of day/week/month", ErrInvalidInput)
+	}
+
+	previousFrom, previousTo := derivePreviousPeriod(input.Mode, input.CurrentFrom, input.CurrentTo, input.PreviousFrom, input.PreviousTo)
+	if previousTo.Before(previousFrom) {
+		return nil, fmt.Errorf("%w: invalid previous period", ErrInvalidInput)
+	}
+
+	currentFilters := input.BaseFilters
+	currentFilters.From = input.CurrentFrom
+	currentFilters.To = input.CurrentTo
+	currentFilters.UseOperationalWindow = true
+
+	previousFilters := input.BaseFilters
+	previousFilters.From = previousFrom
+	previousFilters.To = previousTo
+	previousFilters.UseOperationalWindow = true
+
+	currentStats, err := s.repo.GetReportStats(ctx, currentFilters)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get current period stats: %w", err)
+	}
+	previousStats, err := s.repo.GetReportStats(ctx, previousFilters)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get previous period stats: %w", err)
+	}
+
+	current := ComparisonPeriodData{
+		From:        input.CurrentFrom,
+		To:          input.CurrentTo,
+		TotalVolume: currentStats.TotalVolume,
+		TripCount:   currentStats.TripCount,
+	}
+	previous := ComparisonPeriodData{
+		From:        previousFrom,
+		To:          previousTo,
+		TotalVolume: previousStats.TotalVolume,
+		TripCount:   previousStats.TripCount,
+	}
+
+	if input.Mode == ComparisonModeWeek || input.Mode == ComparisonModeMonth {
+		currentDays := inclusiveDayCount(input.CurrentFrom, input.CurrentTo)
+		previousDays := inclusiveDayCount(previousFrom, previousTo)
+
+		current.AvgVolumePerDay = currentStats.TotalVolume / float64(currentDays)
+		current.AvgTripsPerDay = float64(currentStats.TripCount) / float64(currentDays)
+		previous.AvgVolumePerDay = previousStats.TotalVolume / float64(previousDays)
+		previous.AvgTripsPerDay = float64(previousStats.TripCount) / float64(previousDays)
+	}
+
+	deviation := ComparisonDeviation{
+		VolumePercent: percentDelta(current.TotalVolume, previous.TotalVolume),
+		TripPercent:   percentDelta(float64(current.TripCount), float64(previous.TripCount)),
+		VolumeColor:   deltaColor(current.TotalVolume, previous.TotalVolume),
+		TripColor:     deltaColor(float64(current.TripCount), float64(previous.TripCount)),
+	}
+	if input.Mode == ComparisonModeWeek || input.Mode == ComparisonModeMonth {
+		deviation.AvgVolumePercent = percentDelta(current.AvgVolumePerDay, previous.AvgVolumePerDay)
+		deviation.AvgTripsPercent = percentDelta(current.AvgTripsPerDay, previous.AvgTripsPerDay)
+		deviation.AvgVolumeColor = deltaColor(current.AvgVolumePerDay, previous.AvgVolumePerDay)
+		deviation.AvgTripsColor = deltaColor(current.AvgTripsPerDay, previous.AvgTripsPerDay)
+	}
+
+	return &ReportComparisonResult{
+		Mode:      input.Mode,
+		Current:   current,
+		Previous:  previous,
+		Deviation: deviation,
+	}, nil
+}
+
+func derivePreviousPeriod(mode ComparisonMode, currentFrom, currentTo time.Time, explicitFrom, explicitTo *time.Time) (time.Time, time.Time) {
+	if explicitFrom != nil && explicitTo != nil {
+		return *explicitFrom, *explicitTo
+	}
+
+	switch mode {
+	case ComparisonModeWeek:
+		return currentFrom.AddDate(0, 0, -7), currentTo.AddDate(0, 0, -7)
+	case ComparisonModeMonth:
+		return currentFrom.AddDate(0, -1, 0), currentTo.AddDate(0, -1, 0)
+	default:
+		return currentFrom.AddDate(0, 0, -1), currentTo.AddDate(0, 0, -1)
+	}
+}
+
+func inclusiveDayCount(from, to time.Time) int {
+	utcStart := time.Date(from.UTC().Year(), from.UTC().Month(), from.UTC().Day(), 0, 0, 0, 0, time.UTC)
+	utcEnd := time.Date(to.UTC().Year(), to.UTC().Month(), to.UTC().Day(), 0, 0, 0, 0, time.UTC)
+	days := int(utcEnd.Sub(utcStart).Hours()/24) + 1
+	if days < 1 {
+		return 1
+	}
+	return days
+}
+
+func percentDelta(current, previous float64) float64 {
+	if previous == 0 {
+		if current == 0 {
+			return 0
+		}
+		return 100
+	}
+	return ((current - previous) / previous) * 100
+}
+
+func deltaColor(current, previous float64) string {
+	if current > previous {
+		return "green"
+	}
+	if current < previous {
+		return "red"
+	}
+	return "gray"
 }
 
 // ExportReportsExcel экспортирует отчеты в Excel файл
@@ -1041,14 +1206,14 @@ func (s *ANPRService) generateExcelReport(ctx context.Context, filters repositor
 					}
 				}
 
-			// Пустая строка перед новой группой (если не первая)
-			if lastContractorName != "" {
-				cell, _ := excelize.CoordinatesToCellName(1, rowNum)
-				if err := sw.SetRow(cell, []interface{}{"", "", "", "", "", ""}); err != nil {
-					return nil, "", fmt.Errorf("failed to set empty row: %w", err)
+				// Пустая строка перед новой группой (если не первая)
+				if lastContractorName != "" {
+					cell, _ := excelize.CoordinatesToCellName(1, rowNum)
+					if err := sw.SetRow(cell, []interface{}{"", "", "", "", "", ""}); err != nil {
+						return nil, "", fmt.Errorf("failed to set empty row: %w", err)
+					}
+					rowNum++
 				}
-				rowNum++
-			}
 
 				// Заголовок новой группы
 				groupHeader := fmt.Sprintf("ТОО: %s", contractorName)
@@ -1079,7 +1244,7 @@ func (s *ANPRService) generateExcelReport(ctx context.Context, filters repositor
 			vehicleInfo := formatVehicleInfo(event.VehicleBrand, event.VehicleModel)
 			plateNumber := formatPlateNumber(event.NormalizedPlate, event.RawPlate)
 			eventTimeKZ := event.EventTime.In(kzLocation)
-			
+
 			// Форматируем процент и объем отдельно
 			percentageStr := formatPercentage(event.SnowVolumePercentage)
 			volumeStr := formatVolume(event.SnowVolumeM3)

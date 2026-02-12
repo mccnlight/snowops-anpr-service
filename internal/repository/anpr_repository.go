@@ -572,13 +572,13 @@ func (r *ANPRRepository) GetEventPhotos(ctx context.Context, eventID uuid.UUID) 
 // ReportEvent представляет событие для отчетов с данными о транспорте и подрядчике
 type ReportEvent struct {
 	ANPREvent
-	VehicleID       *uuid.UUID `gorm:"column:vehicle_id"`
-	ContractorID    *uuid.UUID `gorm:"column:contractor_id"`
+	VehicleID      *uuid.UUID `gorm:"column:vehicle_id"`
+	ContractorID   *uuid.UUID `gorm:"column:contractor_id"`
 	ContractorName *string    `gorm:"column:contractor_name"`
-	VehicleBrand    *string
-	VehicleModel    *string
-	PlatePhotoURL   *string `gorm:"column:plate_photo_url"`
-	BodyPhotoURL    *string `gorm:"column:body_photo_url"`
+	VehicleBrand   *string
+	VehicleModel   *string
+	PlatePhotoURL  *string `gorm:"column:plate_photo_url"`
+	BodyPhotoURL   *string `gorm:"column:body_photo_url"`
 }
 
 // GetReportEvents получает события для отчетов с фильтрацией
@@ -683,6 +683,9 @@ func (r *ANPRRepository) GetReportStats(ctx context.Context, filters ReportFilte
 	if filters.OnlyAssigned {
 		query = query.Where("(e.contractor_id IS NOT NULL OR v.contractor_id IS NOT NULL)")
 	}
+	if filters.UseOperationalWindow {
+		query = query.Where("((e.event_time AT TIME ZONE 'Asia/Qyzylorda')::time >= TIME '16:00:00' OR (e.event_time AT TIME ZONE 'Asia/Qyzylorda')::time < TIME '10:00:00')")
+	}
 
 	var stats ReportStats
 	err := query.Scan(&stats).Error
@@ -691,16 +694,17 @@ func (r *ANPRRepository) GetReportStats(ctx context.Context, filters ReportFilte
 
 // ReportFilters содержит фильтры для отчетов
 type ReportFilters struct {
-	ContractorID  *uuid.UUID
-	PolygonID     *uuid.UUID
-	VehicleID     *uuid.UUID
-	PlateNumber   *string
-	From          time.Time
-	To            time.Time
-	OnlyAssigned  bool // Только привязанные события (для подрядчиков)
-	Limit         int
-	Offset        int
-	MaxRows       int // Максимальное количество строк для экспорта
+	ContractorID         *uuid.UUID
+	PolygonID            *uuid.UUID
+	VehicleID            *uuid.UUID
+	PlateNumber          *string
+	From                 time.Time
+	To                   time.Time
+	OnlyAssigned         bool // Только привязанные события (для подрядчиков)
+	UseOperationalWindow bool // Учитывать только рабочее окно 16:00-10:00 (Asia/Qyzylorda)
+	Limit                int
+	Offset               int
+	MaxRows              int // Максимальное количество строк для экспорта
 }
 
 // ReportStats содержит статистику для отчетов
