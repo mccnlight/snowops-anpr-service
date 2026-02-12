@@ -713,6 +713,61 @@ type ReportStats struct {
 	TripCount   int64   `gorm:"column:trip_count"`
 }
 
+// HourlyActivityStat содержит агрегированные показатели по часам суток (0..23)
+type HourlyActivityStat struct {
+	HourOfDay   int     `gorm:"column:hour_of_day"`
+	TotalVolume float64 `gorm:"column:total_volume"`
+	TripCount   int64   `gorm:"column:trip_count"`
+}
+
+// GetHourlyActivityStats возвращает агрегированную активность по часам суток.
+// Фильтр рабочего окна считается в Asia/Qyzylorda, а час бакета возвращается в UTC.
+func (r *ANPRRepository) GetHourlyActivityStats(ctx context.Context, filters ReportFilters) ([]HourlyActivityStat, error) {
+	query := r.db.WithContext(ctx).
+		Table("anpr_events AS e").
+		Select(`
+			EXTRACT(HOUR FROM (e.event_time AT TIME ZONE 'UTC'))::int AS hour_of_day,
+			COALESCE(SUM(e.snow_volume_m3), 0) AS total_volume,
+			COUNT(*) AS trip_count
+		`).
+		Joins("LEFT JOIN vehicles v ON normalize_plate_number(v.plate_number) = e.normalized_plate AND v.is_active = true").
+		Where("e.snow_volume_m3 IS NOT NULL AND e.snow_volume_m3 > 0")
+
+	if filters.ContractorID != nil {
+		query = query.Where("(e.contractor_id = ? OR v.contractor_id = ?)", *filters.ContractorID, *filters.ContractorID)
+	}
+	if filters.PolygonID != nil {
+		query = query.Where("e.polygon_id = ?", *filters.PolygonID)
+	}
+	if !filters.From.IsZero() {
+		query = query.Where("e.event_time >= ?", filters.From)
+	}
+	if !filters.To.IsZero() {
+		query = query.Where("e.event_time <= ?", filters.To)
+	}
+	if filters.PlateNumber != nil && *filters.PlateNumber != "" {
+		normalized := fmt.Sprintf("%%%s%%", *filters.PlateNumber)
+		query = query.Where("e.normalized_plate LIKE ? OR e.raw_plate LIKE ?", normalized, normalized)
+	}
+	if filters.VehicleID != nil {
+		query = query.Where("v.id = ?", *filters.VehicleID)
+	}
+	if filters.OnlyAssigned {
+		query = query.Where("(e.contractor_id IS NOT NULL OR v.contractor_id IS NOT NULL)")
+	}
+	if filters.UseOperationalWindow {
+		query = query.Where("((e.event_time AT TIME ZONE 'Asia/Qyzylorda')::time >= TIME '16:00:00' OR (e.event_time AT TIME ZONE 'Asia/Qyzylorda')::time < TIME '10:00:00')")
+	}
+
+	query = query.
+		Group("hour_of_day").
+		Order("CASE WHEN EXTRACT(HOUR FROM (e.event_time AT TIME ZONE 'UTC'))::int >= 16 THEN EXTRACT(HOUR FROM (e.event_time AT TIME ZONE 'UTC'))::int ELSE EXTRACT(HOUR FROM (e.event_time AT TIME ZONE 'UTC'))::int + 24 END ASC")
+
+	var rows []HourlyActivityStat
+	err := query.Scan(&rows).Error
+	return rows, err
+}
+
 // GetReportEventsForExcel получает события для Excel выгрузки порциями с правильной сортировкой
 // Сортировка: contractor_id ASC NULLS LAST, normalized_plate ASC, event_time DESC
 // Работает без таблиц vehicles и organizations (использует только данные из anpr_events)

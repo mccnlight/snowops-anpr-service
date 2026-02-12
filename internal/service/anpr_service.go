@@ -853,6 +853,18 @@ type ComparisonDeviation struct {
 	AvgTripsColor    string  `json:"avg_trips_color,omitempty"`
 }
 
+type HourlyActivityResult struct {
+	From  time.Time            `json:"from"`
+	To    time.Time            `json:"to"`
+	Items []HourlyActivityItem `json:"items"`
+}
+
+type HourlyActivityItem struct {
+	Hour        int     `json:"hour"`
+	TotalVolume float64 `json:"total_volume"`
+	TripCount   int64   `json:"trip_count"`
+}
+
 // ReportEventInfo содержит информацию о событии для отчета
 type ReportEventInfo struct {
 	ID                string    `json:"id"`
@@ -956,6 +968,40 @@ func (s *ANPRService) GetReportsComparison(ctx context.Context, input ReportComp
 		Current:   current,
 		Previous:  previous,
 		Deviation: deviation,
+	}, nil
+}
+
+func (s *ANPRService) GetHourlyActivity(ctx context.Context, filters repository.ReportFilters) (*HourlyActivityResult, error) {
+	rows, err := s.repo.GetHourlyActivityStats(ctx, filters)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get hourly activity stats: %w", err)
+	}
+
+	// Полный суточный круг, но в рабочем порядке смены: 16:00 -> 15:00.
+	workingHours := []int{16, 17, 18, 19, 20, 21, 22, 23, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
+	items := make([]HourlyActivityItem, 0, len(workingHours))
+	indexByHour := make(map[int]int, len(workingHours))
+	for idx, hour := range workingHours {
+		indexByHour[hour] = idx
+		items = append(items, HourlyActivityItem{
+			Hour:        hour,
+			TotalVolume: 0,
+			TripCount:   0,
+		})
+	}
+	for _, row := range rows {
+		itemIdx, ok := indexByHour[row.HourOfDay]
+		if !ok {
+			continue
+		}
+		items[itemIdx].TotalVolume = row.TotalVolume
+		items[itemIdx].TripCount = row.TripCount
+	}
+
+	return &HourlyActivityResult{
+		From:  filters.From,
+		To:    filters.To,
+		Items: items,
 	}, nil
 }
 

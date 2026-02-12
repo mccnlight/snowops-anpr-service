@@ -119,6 +119,8 @@ docker compose up --build
 - Ошибка: `{ "error": "описание ошибки" }`
 
 > Для фронтенда по сравнению периодов см. отдельный документ: `README_COMPARISON_FRONTEND.md`
+>
+> Для фронтенда по пиковой активности по часам см. отдельный документ: `README_PEAK_HOURS_FRONTEND.md`
 
 ### Health Checks
 

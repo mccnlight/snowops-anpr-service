@@ -69,6 +69,7 @@ func (h *Handler) Register(r *gin.Engine, authMiddleware gin.HandlerFunc) {
 		protected.DELETE("/anpr/events/old", h.deleteOldEvents)
 		protected.DELETE("/anpr/events/all", h.deleteAllEvents)
 		protected.GET("/reports", h.getReports)
+		protected.GET("/reports/hourly-activity", h.getReportsHourlyActivity)
 		protected.GET("/reports/comparison", h.getReportsComparison)
 		protected.GET("/reports/excel", h.exportReportsExcel)
 	}
@@ -1483,6 +1484,100 @@ func (h *Handler) getReportsComparison(c *gin.Context) {
 			return
 		}
 		h.log.Error().Err(err).Msg("failed to get reports comparison")
+		c.JSON(http.StatusInternalServerError, errorResponse("internal error"))
+		return
+	}
+
+	c.JSON(http.StatusOK, successResponse(result))
+}
+
+func (h *Handler) getReportsHourlyActivity(c *gin.Context) {
+	principal, ok := middleware.MustPrincipal(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, errorResponse("unauthorized"))
+		return
+	}
+
+	filters := repository.ReportFilters{}
+
+	if contractorIDStr := strings.TrimSpace(c.Query("contractor_id")); contractorIDStr != "" {
+		contractorID, err := uuid.Parse(contractorIDStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, errorResponse("invalid contractor_id"))
+			return
+		}
+		filters.ContractorID = &contractorID
+	}
+	if polygonIDStr := strings.TrimSpace(c.Query("polygon_id")); polygonIDStr != "" {
+		polygonID, err := uuid.Parse(polygonIDStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, errorResponse("invalid polygon_id"))
+			return
+		}
+		filters.PolygonID = &polygonID
+	}
+	if vehicleIDStr := strings.TrimSpace(c.Query("vehicle_id")); vehicleIDStr != "" {
+		vehicleID, err := uuid.Parse(vehicleIDStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, errorResponse("invalid vehicle_id"))
+			return
+		}
+		filters.VehicleID = &vehicleID
+	}
+	if plateNumber := strings.TrimSpace(c.Query("plate")); plateNumber != "" {
+		filters.PlateNumber = &plateNumber
+	}
+
+	var fromTime, toTime time.Time
+	if fromStr := strings.TrimSpace(c.Query("from")); fromStr != "" {
+		t, err := time.Parse(time.RFC3339, fromStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, errorResponse("invalid from time format, use RFC3339"))
+			return
+		}
+		fromTime = t
+		filters.From = fromTime
+	}
+	if toStr := strings.TrimSpace(c.Query("to")); toStr != "" {
+		t, err := time.Parse(time.RFC3339, toStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, errorResponse("invalid to time format, use RFC3339"))
+			return
+		}
+		toTime = t
+		filters.To = toTime
+	}
+
+	if fromTime.IsZero() && toTime.IsZero() {
+		now := time.Now()
+		filters.From = now.AddDate(0, 0, -1)
+		filters.To = now
+	} else if !fromTime.IsZero() && toTime.IsZero() {
+		filters.To = time.Now()
+	} else if fromTime.IsZero() && !toTime.IsZero() {
+		filters.From = toTime.AddDate(0, 0, -1)
+	}
+
+	if filters.To.Before(filters.From) {
+		c.JSON(http.StatusBadRequest, errorResponse("to time must be after from time"))
+		return
+	}
+
+	if principal.IsContractor() {
+		filters.ContractorID = &principal.OrgID
+		filters.OnlyAssigned = true
+	} else {
+		filters.OnlyAssigned = false
+	}
+	filters.UseOperationalWindow = true
+
+	result, err := h.anprService.GetHourlyActivity(c.Request.Context(), filters)
+	if err != nil {
+		if errors.Is(err, service.ErrInvalidInput) {
+			c.JSON(http.StatusBadRequest, errorResponse(err.Error()))
+			return
+		}
+		h.log.Error().Err(err).Msg("failed to get hourly activity")
 		c.JSON(http.StatusInternalServerError, errorResponse("internal error"))
 		return
 	}
