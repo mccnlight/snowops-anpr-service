@@ -126,7 +126,13 @@ func (s *ANPRService) ProcessIncomingEvent(ctx context.Context, payload anpr.Eve
 		s.log.Warn().
 			Str("plate", normalized).
 			Msg("vehicle not found in vehicles table (whitelist check failed)")
-		// Если машина не найдена в vehicles — не сохраняем событие
+		// Сохраняем отклонённое событие в anpr_events_rejected для последующего разбора
+		if errRej := s.repo.CreateRejectedEvent(ctx, eventID, plateID, normalized, payload.Plate, payload.CameraID, payload.EventTime, &payload, photoURLs); errRej != nil {
+			s.log.Error().Err(errRej).Str("plate", normalized).Msg("failed to save rejected event to anpr_events_rejected")
+			// Не меняем ответ клиенту — всё равно возвращаем ErrVehicleNotWhitelisted
+		} else {
+			s.log.Info().Str("plate", normalized).Str("event_id", eventID.String()).Msg("rejected event saved to anpr_events_rejected")
+		}
 		return nil, fmt.Errorf("%w: vehicle not found in vehicles table", ErrVehicleNotWhitelisted)
 	}
 

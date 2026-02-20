@@ -232,6 +232,23 @@ var migrationStatements = []string{
 	);`,
 	`CREATE INDEX IF NOT EXISTS idx_anpr_event_photos_event_id ON anpr_event_photos(event_id);`,
 	`CREATE INDEX IF NOT EXISTS idx_anpr_event_photos_display_order ON anpr_event_photos(event_id, display_order);`,
+
+	// Таблица anpr_events_rejected — события, отклонённые из-за отсутствия номера в vehicles (whitelist)
+	`CREATE TABLE IF NOT EXISTS anpr_events_rejected (
+		id               UUID PRIMARY KEY,
+		plate_id         UUID REFERENCES anpr_plates(id) ON DELETE SET NULL,
+		camera_id        TEXT NOT NULL,
+		raw_plate        TEXT NOT NULL,
+		normalized_plate TEXT NOT NULL,
+		event_time       TIMESTAMPTZ NOT NULL,
+		raw_payload      JSONB,
+		photo_urls       JSONB,
+		reject_reason    TEXT NOT NULL DEFAULT 'vehicle_not_in_whitelist',
+		created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+	);`,
+	`CREATE INDEX IF NOT EXISTS idx_anpr_events_rejected_normalized_plate ON anpr_events_rejected(normalized_plate);`,
+	`CREATE INDEX IF NOT EXISTS idx_anpr_events_rejected_event_time ON anpr_events_rejected(event_time);`,
+	`CREATE INDEX IF NOT EXISTS idx_anpr_events_rejected_created_at ON anpr_events_rejected(created_at);`,
 }
 
 func runMigrations(db *gorm.DB) error {

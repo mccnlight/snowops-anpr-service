@@ -157,6 +157,51 @@ func (r *ANPRRepository) GetOrCreatePlate(ctx context.Context, normalized, origi
 	return plate.ID, nil
 }
 
+// RejectedEvent — событие, отклонённое из-за отсутствия номера в vehicles (сохраняется в anpr_events_rejected)
+type RejectedEvent struct {
+	ID              uuid.UUID      `gorm:"type:uuid;primaryKey"`
+	PlateID         uuid.UUID      `gorm:"type:uuid;not null"`
+	CameraID        string         `gorm:"not null"`
+	RawPlate        string         `gorm:"not null"`
+	NormalizedPlate string         `gorm:"not null"`
+	EventTime       time.Time      `gorm:"not null"`
+	RawPayload      datatypes.JSON `gorm:"type:jsonb"`
+	PhotoURLs       datatypes.JSON `gorm:"type:jsonb"`
+	RejectReason    string         `gorm:"not null;default:vehicle_not_in_whitelist"`
+	CreatedAt       time.Time      `gorm:"not null"`
+}
+
+func (RejectedEvent) TableName() string {
+	return "anpr_events_rejected"
+}
+
+const rejectReasonVehicleNotWhitelist = "vehicle_not_in_whitelist"
+
+// CreateRejectedEvent сохраняет отклонённое событие (номер не найден в vehicles) в anpr_events_rejected
+func (r *ANPRRepository) CreateRejectedEvent(ctx context.Context, eventID, plateID uuid.UUID, normalizedPlate, rawPlate, cameraID string, eventTime time.Time, payload *anpr.EventPayload, photoURLs []string) error {
+	rawPayload, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal payload for rejected event: %w", err)
+	}
+	photoURLsJSON, err := json.Marshal(photoURLs)
+	if err != nil {
+		return fmt.Errorf("marshal photo_urls for rejected event: %w", err)
+	}
+	rec := RejectedEvent{
+		ID:              eventID,
+		PlateID:         plateID,
+		CameraID:        cameraID,
+		RawPlate:        rawPlate,
+		NormalizedPlate: normalizedPlate,
+		EventTime:       eventTime,
+		RawPayload:      datatypes.JSON(rawPayload),
+		PhotoURLs:       datatypes.JSON(photoURLsJSON),
+		RejectReason:    rejectReasonVehicleNotWhitelist,
+		CreatedAt:       time.Now(),
+	}
+	return r.db.WithContext(ctx).Create(&rec).Error
+}
+
 func (r *ANPRRepository) CreateANPREvent(
 	ctx context.Context,
 	event *anpr.Event,
