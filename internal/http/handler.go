@@ -280,10 +280,10 @@ func (h *Handler) createANPREvent(c *gin.Context) {
 	photoFiles := form.File["photos"]
 	var photoURLs []string
 
-	// Upload photos organized by date, camera_id and time
+	// Upload photos organized by date, camera_id, time and plate
 	if h.r2Client != nil && len(photoFiles) > 0 {
 		for i, fileHeader := range photoFiles {
-			url, err := h.uploadEventPhoto(c.Request.Context(), fileHeader, eventID, payload.EventTime, payload.CameraID, i)
+			url, err := h.uploadEventPhoto(c.Request.Context(), fileHeader, eventID, payload.EventTime, payload.CameraID, payload.Plate, i)
 			if err != nil {
 				h.log.Warn().
 					Err(err).
@@ -369,6 +369,7 @@ func (h *Handler) uploadEventPhoto(
 	eventID uuid.UUID,
 	eventTime time.Time,
 	cameraID string,
+	plateNumber string,
 	index int,
 ) (string, error) {
 	const maxPhotoSize = 10 << 20 // 10MB
@@ -438,11 +439,12 @@ func (h *Handler) uploadEventPhoto(
 	dateStr := eventTimeKZ.Format("2006-01-02")
 	timeStr := eventTimeKZ.Format("15-04-05")
 	cameraPath := sanitizePathSegment(cameraID, "unknown_camera")
+	platePath := sanitizePlateForPath(plateNumber, "unknown_plate")
 
-	// Organize photos by date, camera and time:
-	// anpr_events/{YYYY-MM-DD}/{camera_id}/{HH-MM-SS}/{event_id}-photo-{index}{ext}
-	key := fmt.Sprintf("anpr_events/%s/%s/%s/%s-photo-%d%s",
-		dateStr, cameraPath, timeStr, eventID.String(), index, ext)
+	// Organize photos by date, camera, time and plate:
+	// anpr_events/{YYYY-MM-DD}/{camera_id}/{HH-MM-SS}-{plate}/{event_id}-photo-{index}{ext}
+	key := fmt.Sprintf("anpr_events/%s/%s/%s-%s/%s-photo-%d%s",
+		dateStr, cameraPath, timeStr, platePath, eventID.String(), index, ext)
 
 	// Upload to R2
 	url, err := h.r2Client.Upload(ctx, key, file, fileHeader.Size, contentType)
@@ -481,6 +483,25 @@ func sanitizePathSegment(value, fallback string) string {
 	}
 
 	return sanitized
+}
+
+// sanitizePlateForPath оставляет только A–Z и 0–9, в верхнем регистре (для пути R2 с госномером).
+func sanitizePlateForPath(plate, fallback string) string {
+	s := strings.TrimSpace(strings.ToUpper(plate))
+	if s == "" {
+		return fallback
+	}
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	out := b.String()
+	if out == "" {
+		return fallback
+	}
+	return out
 }
 
 func (h *Handler) listPlates(c *gin.Context) {
