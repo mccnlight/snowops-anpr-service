@@ -17,6 +17,9 @@ import (
 	"anpr-service/internal/utils"
 )
 
+// kzLocation — часовой пояс Казахстана (Asia/Qyzylorda, UTC+5) для отображения времени в отчётах и API
+var kzLocation = time.FixedZone("Asia/Qyzylorda", 5*60*60)
+
 var (
 	ErrInvalidInput          = errors.New("invalid input")
 	ErrNotFound              = errors.New("not found")
@@ -765,9 +768,11 @@ func (s *ANPRService) GetReports(ctx context.Context, filters repository.ReportF
 			polygonID = &id
 		}
 
+		// Время в БД хранится в UTC; для API отчётов отдаём в казахстанском времени (UTC+5)
+		eventTimeKZ := e.EventTime.In(kzLocation)
 		reportEvents = append(reportEvents, ReportEventInfo{
 			ID:                e.ID.String(),
-			EventTime:         e.EventTime,
+			EventTime:         eventTimeKZ,
 			PlateNumber:       e.NormalizedPlate,
 			RawPlate:          e.RawPlate,
 			NormalizedPlate:   e.NormalizedPlate,
@@ -1165,9 +1170,6 @@ func (s *ANPRService) generateExcelReport(ctx context.Context, filters repositor
 	if err := f.SetColWidth(sheetName, "F", "F", 14); err != nil {
 		return nil, "", fmt.Errorf("failed to set column width: %w", err)
 	}
-
-	// Казахстанский часовой пояс (Asia/Qyzylorda = UTC+5)
-	kzLocation := time.FixedZone("Asia/Qyzylorda", 5*60*60)
 
 	// Стиль для итоговых строк
 	totalStyle, err := f.NewStyle(&excelize.Style{
