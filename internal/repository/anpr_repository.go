@@ -626,20 +626,28 @@ type ReportEvent struct {
 	BodyPhotoURL   *string `gorm:"column:body_photo_url"`
 }
 
-// GetReportEvents получает события для отчетов с фильтрацией
-func (r *ANPRRepository) GetReportEvents(ctx context.Context, filters ReportFilters) ([]ReportEvent, error) {
-	query := r.db.WithContext(ctx).
-		Table("anpr_events AS e").
-		Select(`
+// Правила выбора индексов фото для отчётов по camera_id:
+// - shahovskoye: 4 фото (0,1,2 — номерные, 3 — снег): plate=1, body=3.
+// - yakor / solnechniy / solnechny / solnechnyy: 2 фото (0 — номер, 1 — снег): plate=0, body=1.
+// - неизвестная камера: fallback plate=0, body=1.
+const (
+	reportPhotoSelectSQL = `
 			e.*,
 			v.id AS vehicle_id,
 			COALESCE(e.contractor_id, v.contractor_id) AS contractor_id,
 			o.name AS contractor_name,
 			v.brand AS vehicle_brand,
 			v.model AS vehicle_model,
-			(SELECT photo_url FROM anpr_event_photos WHERE event_id = e.id AND display_order = 0 LIMIT 1) AS plate_photo_url,
-			(SELECT photo_url FROM anpr_event_photos WHERE event_id = e.id AND display_order = 1 LIMIT 1) AS body_photo_url
-		`).
+			(SELECT photo_url FROM anpr_event_photos p WHERE p.event_id = e.id AND p.display_order = (CASE WHEN LOWER(TRIM(e.camera_id)) = 'shahovskoye' THEN 1 WHEN LOWER(TRIM(e.camera_id)) IN ('yakor','solnechniy','solnechny','solnechnyy') THEN 0 ELSE 0 END) LIMIT 1) AS plate_photo_url,
+			(SELECT photo_url FROM anpr_event_photos p WHERE p.event_id = e.id AND p.display_order = (CASE WHEN LOWER(TRIM(e.camera_id)) = 'shahovskoye' THEN 3 WHEN LOWER(TRIM(e.camera_id)) IN ('yakor','solnechniy','solnechny','solnechnyy') THEN 1 ELSE 1 END) LIMIT 1) AS body_photo_url
+		`
+)
+
+// GetReportEvents получает события для отчетов с фильтрацией
+func (r *ANPRRepository) GetReportEvents(ctx context.Context, filters ReportFilters) ([]ReportEvent, error) {
+	query := r.db.WithContext(ctx).
+		Table("anpr_events AS e").
+		Select(reportPhotoSelectSQL).
 		Joins("LEFT JOIN vehicles v ON normalize_plate_number(v.plate_number) = e.normalized_plate AND v.is_active = true").
 		Joins("LEFT JOIN organizations o ON o.id = COALESCE(e.contractor_id, v.contractor_id)").
 		Where("e.snow_volume_m3 IS NOT NULL AND e.snow_volume_m3 > 0") // Только события с объемом
@@ -813,22 +821,25 @@ func (r *ANPRRepository) GetHourlyActivityStats(ctx context.Context, filters Rep
 	return rows, err
 }
 
-// GetReportEventsForExcel получает события для Excel выгрузки порциями с правильной сортировкой
-// Сортировка: contractor_id ASC NULLS LAST, normalized_plate ASC, event_time DESC
-// Работает без таблиц vehicles и organizations (использует только данные из anpr_events)
-func (r *ANPRRepository) GetReportEventsForExcel(ctx context.Context, filters ReportFilters, pageSize, offset int) ([]ReportEvent, error) {
-	query := r.db.WithContext(ctx).
-		Table("anpr_events AS e").
-		Select(`
+// reportPhotoSelectExcelSQL — те же правила выбора plate/body по camera_id, что и в отчётах (см. комментарий выше).
+const reportPhotoSelectExcelSQL = `
 			e.*,
 			NULL::UUID AS vehicle_id,
 			e.contractor_id AS contractor_id,
 			o.name AS contractor_name,
 			e.vehicle_brand AS vehicle_brand,
 			e.vehicle_model AS vehicle_model,
-			(SELECT photo_url FROM anpr_event_photos WHERE event_id = e.id AND display_order = 0 LIMIT 1) AS plate_photo_url,
-			(SELECT photo_url FROM anpr_event_photos WHERE event_id = e.id AND display_order = 1 LIMIT 1) AS body_photo_url
-		`).
+			(SELECT photo_url FROM anpr_event_photos p WHERE p.event_id = e.id AND p.display_order = (CASE WHEN LOWER(TRIM(e.camera_id)) = 'shahovskoye' THEN 1 WHEN LOWER(TRIM(e.camera_id)) IN ('yakor','solnechniy','solnechny','solnechnyy') THEN 0 ELSE 0 END) LIMIT 1) AS plate_photo_url,
+			(SELECT photo_url FROM anpr_event_photos p WHERE p.event_id = e.id AND p.display_order = (CASE WHEN LOWER(TRIM(e.camera_id)) = 'shahovskoye' THEN 3 WHEN LOWER(TRIM(e.camera_id)) IN ('yakor','solnechniy','solnechny','solnechnyy') THEN 1 ELSE 1 END) LIMIT 1) AS body_photo_url
+		`
+
+// GetReportEventsForExcel получает события для Excel выгрузки порциями с правильной сортировкой
+// Сортировка: contractor_id ASC NULLS LAST, normalized_plate ASC, event_time DESC
+// Работает без таблиц vehicles и organizations (использует только данные из anpr_events)
+func (r *ANPRRepository) GetReportEventsForExcel(ctx context.Context, filters ReportFilters, pageSize, offset int) ([]ReportEvent, error) {
+	query := r.db.WithContext(ctx).
+		Table("anpr_events AS e").
+		Select(reportPhotoSelectExcelSQL).
 		Joins("LEFT JOIN organizations o ON o.id = e.contractor_id")
 	// Для Excel выгрузки показываем все события, не только с snow_volume_m3 > 0
 
