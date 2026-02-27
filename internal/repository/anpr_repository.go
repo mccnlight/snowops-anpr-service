@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,6 +31,8 @@ var cameraAliasToPolygonName = map[string]string{
 func NewANPRRepository(db *gorm.DB) *ANPRRepository {
 	return &ANPRRepository{db: db}
 }
+
+var photoIndexPattern = regexp.MustCompile(`-photo-(\d+)(?:\.[^/?#]+)?(?:\?.*)?(?:#.*)?$`)
 
 func (Plate) TableName() string {
 	return "anpr_plates"
@@ -580,15 +584,31 @@ func (r *ANPRRepository) CreateEventPhotos(ctx context.Context, eventID uuid.UUI
 
 	photos := make([]EventPhoto, 0, len(photoURLs))
 	for i, url := range photoURLs {
+		displayOrder := displayOrderFromPhotoURL(url, i)
 		photos = append(photos, EventPhoto{
 			EventID:      eventID,
 			PhotoURL:     url,
-			DisplayOrder: i,
+			DisplayOrder: displayOrder,
 			CreatedAt:    time.Now(),
 		})
 	}
 
 	return r.db.WithContext(ctx).Create(&photos).Error
+}
+
+func displayOrderFromPhotoURL(photoURL string, fallback int) int {
+	normalized := strings.ToLower(strings.TrimSpace(photoURL))
+	matches := photoIndexPattern.FindStringSubmatch(normalized)
+	if len(matches) != 2 {
+		return fallback
+	}
+
+	parsed, err := strconv.Atoi(matches[1])
+	if err != nil || parsed < 0 {
+		return fallback
+	}
+
+	return parsed
 }
 
 // GetEventByID получает событие по ID
@@ -638,8 +658,72 @@ const (
 			o.name AS contractor_name,
 			v.brand AS vehicle_brand,
 			v.model AS vehicle_model,
-			(SELECT photo_url FROM anpr_event_photos p WHERE p.event_id = e.id AND p.display_order = (CASE WHEN LOWER(TRIM(e.camera_id)) = 'shahovskoye' THEN 1 WHEN LOWER(TRIM(e.camera_id)) IN ('yakor','solnechniy','solnechny','solnechnyy') THEN 0 ELSE 0 END) LIMIT 1) AS plate_photo_url,
-			(SELECT photo_url FROM anpr_event_photos p WHERE p.event_id = e.id AND p.display_order = (CASE WHEN LOWER(TRIM(e.camera_id)) = 'shahovskoye' THEN 3 WHEN LOWER(TRIM(e.camera_id)) IN ('yakor','solnechniy','solnechny','solnechnyy') THEN 1 ELSE 1 END) LIMIT 1) AS body_photo_url
+			COALESCE(
+				(SELECT p.photo_url
+				 FROM anpr_event_photos p
+				 WHERE p.event_id = e.id
+				   AND COALESCE(
+				   		((regexp_match(p.photo_url, '-photo-([0-9]+)([.][^/?#]+)?([?].*)?(#.*)?$'))[1])::int,
+				   		p.display_order
+				   	) = CASE
+				   		WHEN EXISTS (
+				   			SELECT 1
+				   			FROM anpr_event_photos px
+				   			WHERE px.event_id = e.id
+				   			  AND COALESCE(
+				   			  		((regexp_match(px.photo_url, '-photo-([0-9]+)([.][^/?#]+)?([?].*)?(#.*)?$'))[1])::int,
+				   			  		px.display_order
+				   			  	) >= 3
+				   		) THEN 1
+				   		ELSE 0
+				   	END
+				 ORDER BY p.created_at ASC
+				 LIMIT 1),
+				(SELECT p.photo_url
+				 FROM anpr_event_photos p
+				 WHERE p.event_id = e.id
+				 ORDER BY
+				 	COALESCE(
+				 		((regexp_match(p.photo_url, '-photo-([0-9]+)([.][^/?#]+)?([?].*)?(#.*)?$'))[1])::int,
+				 		p.display_order
+				 	) ASC,
+				 	p.display_order ASC,
+				 	p.created_at ASC
+				 LIMIT 1)
+			) AS plate_photo_url,
+			COALESCE(
+				(SELECT p.photo_url
+				 FROM anpr_event_photos p
+				 WHERE p.event_id = e.id
+				   AND COALESCE(
+				   		((regexp_match(p.photo_url, '-photo-([0-9]+)([.][^/?#]+)?([?].*)?(#.*)?$'))[1])::int,
+				   		p.display_order
+				   	) = CASE
+				   		WHEN EXISTS (
+				   			SELECT 1
+				   			FROM anpr_event_photos px
+				   			WHERE px.event_id = e.id
+				   			  AND COALESCE(
+				   			  		((regexp_match(px.photo_url, '-photo-([0-9]+)([.][^/?#]+)?([?].*)?(#.*)?$'))[1])::int,
+				   			  		px.display_order
+				   			  	) >= 3
+				   		) THEN 3
+				   		ELSE 1
+				   	END
+				 ORDER BY p.created_at ASC
+				 LIMIT 1),
+				(SELECT p.photo_url
+				 FROM anpr_event_photos p
+				 WHERE p.event_id = e.id
+				 ORDER BY
+				 	COALESCE(
+				 		((regexp_match(p.photo_url, '-photo-([0-9]+)([.][^/?#]+)?([?].*)?(#.*)?$'))[1])::int,
+				 		p.display_order
+				 	) ASC,
+				 	p.display_order ASC,
+				 	p.created_at ASC
+				 OFFSET 1 LIMIT 1)
+			) AS body_photo_url
 		`
 )
 
@@ -829,8 +913,72 @@ const reportPhotoSelectExcelSQL = `
 			o.name AS contractor_name,
 			e.vehicle_brand AS vehicle_brand,
 			e.vehicle_model AS vehicle_model,
-			(SELECT photo_url FROM anpr_event_photos p WHERE p.event_id = e.id AND p.display_order = (CASE WHEN LOWER(TRIM(e.camera_id)) = 'shahovskoye' THEN 1 WHEN LOWER(TRIM(e.camera_id)) IN ('yakor','solnechniy','solnechny','solnechnyy') THEN 0 ELSE 0 END) LIMIT 1) AS plate_photo_url,
-			(SELECT photo_url FROM anpr_event_photos p WHERE p.event_id = e.id AND p.display_order = (CASE WHEN LOWER(TRIM(e.camera_id)) = 'shahovskoye' THEN 3 WHEN LOWER(TRIM(e.camera_id)) IN ('yakor','solnechniy','solnechny','solnechnyy') THEN 1 ELSE 1 END) LIMIT 1) AS body_photo_url
+			COALESCE(
+				(SELECT p.photo_url
+				 FROM anpr_event_photos p
+				 WHERE p.event_id = e.id
+				   AND COALESCE(
+				   		((regexp_match(p.photo_url, '-photo-([0-9]+)([.][^/?#]+)?([?].*)?(#.*)?$'))[1])::int,
+				   		p.display_order
+				   	) = CASE
+				   		WHEN EXISTS (
+				   			SELECT 1
+				   			FROM anpr_event_photos px
+				   			WHERE px.event_id = e.id
+				   			  AND COALESCE(
+				   			  		((regexp_match(px.photo_url, '-photo-([0-9]+)([.][^/?#]+)?([?].*)?(#.*)?$'))[1])::int,
+				   			  		px.display_order
+				   			  	) >= 3
+				   		) THEN 1
+				   		ELSE 0
+				   	END
+				 ORDER BY p.created_at ASC
+				 LIMIT 1),
+				(SELECT p.photo_url
+				 FROM anpr_event_photos p
+				 WHERE p.event_id = e.id
+				 ORDER BY
+				 	COALESCE(
+				 		((regexp_match(p.photo_url, '-photo-([0-9]+)([.][^/?#]+)?([?].*)?(#.*)?$'))[1])::int,
+				 		p.display_order
+				 	) ASC,
+				 	p.display_order ASC,
+				 	p.created_at ASC
+				 LIMIT 1)
+			) AS plate_photo_url,
+			COALESCE(
+				(SELECT p.photo_url
+				 FROM anpr_event_photos p
+				 WHERE p.event_id = e.id
+				   AND COALESCE(
+				   		((regexp_match(p.photo_url, '-photo-([0-9]+)([.][^/?#]+)?([?].*)?(#.*)?$'))[1])::int,
+				   		p.display_order
+				   	) = CASE
+				   		WHEN EXISTS (
+				   			SELECT 1
+				   			FROM anpr_event_photos px
+				   			WHERE px.event_id = e.id
+				   			  AND COALESCE(
+				   			  		((regexp_match(px.photo_url, '-photo-([0-9]+)([.][^/?#]+)?([?].*)?(#.*)?$'))[1])::int,
+				   			  		px.display_order
+				   			  	) >= 3
+				   		) THEN 3
+				   		ELSE 1
+				   	END
+				 ORDER BY p.created_at ASC
+				 LIMIT 1),
+				(SELECT p.photo_url
+				 FROM anpr_event_photos p
+				 WHERE p.event_id = e.id
+				 ORDER BY
+				 	COALESCE(
+				 		((regexp_match(p.photo_url, '-photo-([0-9]+)([.][^/?#]+)?([?].*)?(#.*)?$'))[1])::int,
+				 		p.display_order
+				 	) ASC,
+				 	p.display_order ASC,
+				 	p.created_at ASC
+				 OFFSET 1 LIMIT 1)
+			) AS body_photo_url
 		`
 
 // GetReportEventsForExcel получает события для Excel выгрузки порциями с правильной сортировкой
